@@ -1,0 +1,92 @@
+{
+  "name": "tutorial-studio",
+  "productName": "Tutorial Studio",
+  "version": "0.1.0",
+  "description": "SaaS tutorial video editor with synthetic cursor animation",
+  "private": true,
+  "main": "dist/electron/main.cjs",
+  "author": "Tutorial Studio",
+  "scripts": {
+    "build:native": "bash scripts/build-native.sh",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:native && npm run build:renderer && npm run build:electron",
+    "dev": "node scripts/dev.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run build && electron-builder --mac dir --arm64 && node scripts/verify-package.mjs",
+    "package:dmg": "npm run build && electron-builder --mac dmg --arm64",
+    "test:e2e": "npm run build && node tests/e2e/scenario.mjs",
+    "test:all": "npm run build:native && vitest run && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.5.1",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3",
+    "vite": "8.3.3",
+    "vitest": "5.0.3",
+    "lucide-react": "1.52.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zustand": "5.0.15"
+  },
+  "build": {
+    "appId": "com.tutorialstudio.editor",
+    "productName": "Tutorial Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/electron/**",
+      "dist/renderer/**",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraFiles": [
+      {
+        "from": "native/.build/release/studio-render",
+        "to": "MacOS/studio-render"
+      },
+      {
+        "from": "native/.build/release/studio-recorder",
+        "to": "MacOS/studio-recorder"
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.video",
+      "icon": "build/icon.icns",
+      "target": [
+        "dir"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "minimumSystemVersion": "14.0",
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSHighResolutionCapable": true
+      }
+    },
+    "fileAssociations": [
+      {
+        "ext": "tvproj",
+        "name": "Tutorial Studio Project",
+        "role": "Editor",
+        "isPackage": true,
+        "icon": "build/icon.icns"
+      }
+    ],
+    "dmg": {
+      "title": "Tutorial Studio"
+    }
+  }
+}

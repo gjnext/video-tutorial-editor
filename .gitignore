@@ -1,0 +1,8 @@
+tests/.output/
+node_modules/
+dist/
+release/
+native/.build/
+*.log
+.DS_Store
+.claude/
