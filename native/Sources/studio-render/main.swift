@@ -10,6 +10,7 @@ import StudioNative
 ///   export <plan.json>                            → progress lines, then {type:result, path, bytes}
 ///   render-frame <plan.json> <index> <out.png>    → render one planned frame (consistency tests)
 ///   extract-frame <video> <seconds> <out.png>     → exact decoded frame (verification)
+///   proxy <in> <out.mp4> <maxWidth>               → short-GOP scrubbing proxy for the preview
 ///
 /// Cancellation: write "cancel" to stdin, close stdin, or send SIGTERM.
 
@@ -47,6 +48,9 @@ func runMain() async {
             }
             try Thumbnails.writePNG(cg, to: args[4])
             IO.result(["path": args[4]])
+        case "proxy":
+            guard args.count >= 5 else { IO.fail("proxy <in> <out.mp4> <maxWidth>") }
+            IO.result(try await Proxy.run(input: args[2], output: args[3], maxWidth: Int(args[4]) ?? 1280))
         case "extract-frame":
             guard args.count >= 5, let secs = Double(args[3]) else { IO.fail("extract-frame <video> <seconds> <out.png>") }
             let asset = AVURLAsset(url: URL(fileURLWithPath: args[2]))

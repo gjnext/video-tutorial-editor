@@ -7,7 +7,7 @@ import path from 'node:path';
 import { migrateProject, PROJECT_EXTENSION, type MediaAsset } from '../../shared/schema';
 import type { RecordingConfig, RecordingEvent, SaveProjectRequest } from '../../shared/ipc';
 import { buildMenu } from './menu';
-import { allowDir, allowFile, AUDIO_EXTS, handleMediaProtocol, IMAGE_EXTS, importPaths, kindForPath, mediaUrl, probeToAsset, registerMediaScheme, thumbnails, VIDEO_EXTS } from './media';
+import { allowDir, allowFile, AUDIO_EXTS, handleMediaProtocol, IMAGE_EXTS, importPaths, kindForPath, mediaUrl, probeToAsset, proxyFor, registerMediaScheme, thumbnails, VIDEO_EXTS } from './media';
 import { clearRecovery, ensurePackagePath, isProjectPackage, openProject, readRecovery, recentProjects, saveProject, writeRecovery } from './project';
 import { cancelAllExports, cancelExport, startExport } from './exporter';
 import { cancelRecording, isRecording, listSources, openPermissionSettings, permission, requestPermission, startRecording, stopRecording } from './recorder';
@@ -218,6 +218,10 @@ function registerIpc() {
   ipcMain.handle('media:thumbnails', async (e, a: unknown) => {
     fromMainWindow(e);
     return thumbnails(asset(a), mediaUrl);
+  });
+  ipcMain.handle('media:proxy', async (e, a: unknown) => {
+    fromMainWindow(e);
+    return proxyFor(asset(a), mediaUrl);
   });
   ipcMain.handle('media:relink', async (e, a: unknown) => {
     fromMainWindow(e);

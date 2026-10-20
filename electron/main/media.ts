@@ -6,12 +6,12 @@
  */
 import { protocol } from 'electron';
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { newId, type MediaAsset, type MediaKind } from '../../shared/schema';
 import { secondsToFlicks } from '../../shared/time';
-import type { ThumbnailStrip } from '../../shared/ipc';
+import type { ProxyInfo, ThumbnailStrip } from '../../shared/ipc';
 import { runHelper } from './native';
 import { dirs } from './paths';
 
@@ -156,4 +156,36 @@ export async function thumbnails(asset: MediaAsset, toUrl: (p: string) => string
 
 export function mediaUrl(p: string): string {
   return `${MEDIA_SCHEME}://local/${encodeURIComponent(p)}`;
+}
+
+// ---------------------------------------------------------------- scrub proxies
+
+const PROXY_WIDTH = 1280;
+const proxyJobs = new Map<string, Promise<ProxyInfo>>();
+
+/** Short-GOP downscaled copy for fast preview scrubbing (cached; never used for export). */
+export function proxyFor(asset: MediaAsset, toUrl: (p: string) => string): Promise<ProxyInfo> {
+  if (asset.kind !== 'video') return Promise.reject(new Error('Proxies are only generated for video.'));
+  if (!isAllowed(asset.path)) return Promise.reject(new Error('Access denied.'));
+  const st = statSync(asset.path);
+  const key = createHash('sha1').update(`proxy|${asset.path}|${st.size}|${st.mtimeMs}|${PROXY_WIDTH}`).digest('hex').slice(0, 20);
+  const dir = path.join(dirs.cache(), 'proxies');
+  mkdirSync(dir, { recursive: true });
+  allowDir(dir);
+  const file = path.join(dir, `${key}.mp4`);
+  const meta = `${file}.json`;
+  let job = proxyJobs.get(key);
+  if (!job) {
+    job = (async () => {
+      if (!existsSync(file) || !existsSync(meta)) {
+        const r = (await runHelper('studio-render', ['proxy', asset.path, file, String(PROXY_WIDTH)], 30 * 60_000)) as Record<string, any>;
+        writeFileSync(meta, JSON.stringify({ width: r.width, height: r.height }));
+      }
+      const m = JSON.parse(readFileSync(meta, 'utf8'));
+      return { assetId: asset.id, url: toUrl(file), width: m.width, height: m.height };
+    })();
+    job.catch(() => proxyJobs.delete(key));
+    proxyJobs.set(key, job);
+  }
+  return job.then((j) => ({ ...j, assetId: asset.id }));
 }

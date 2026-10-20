@@ -7,7 +7,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Magnet, MousePointerClick, Scissors, Snowflake, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
 import { clipDuration, clipEnd, resolveAudioMove, trimAudioClip } from '../../shared/audio';
-import { cursorWarnings, resolveMove, sortByTime, evaluateCursorPosition } from '../../shared/cursor';
+import { AUTO_HIDE_FADE, autoHideWindows, cursorWarnings, resolveMove, sortByTime, evaluateCursorPosition } from '../../shared/cursor';
 import { applySegmentEdit, audioOverhang, moveSegment, placeSegments, projectDuration, snapPoints, trimSegment } from '../../shared/timeline';
 import { isInsideCrop } from '../../shared/geometry';
 import { assetMap, cursorSpaceAspect } from '../../shared/compose';
@@ -17,13 +17,15 @@ import { editor, useEditor, type Waveform } from '../state/store';
 import { playhead } from '../state/playhead';
 import { player } from '../engine/player';
 import { Button, NumberField, Slider, Toggle, useContextMenu, useTooltip } from '../components/ui';
-import { addClick, addVisibility, deleteSelection, duplicateSelection, extendToCoverAudio, insertFreeze, placeKeyframe, splitAtPlayhead } from '../state/actions';
+import { addClick, addVisibility, deleteSelection, duplicateSelection, extendToCoverAudio, highlightClick, insertFreeze, placeKeyframe, splitAtPlayhead } from '../state/actions';
+import { HIGHLIGHT_SHAPES, INTRO_DURATION } from '../../shared/highlights';
 
 const RULER_H = 26;
 const TRACKS = [
   { id: 'video', label: 'Video', h: 58, color: 'var(--track-video-border)' },
   { id: 'cursor', label: 'Cursor', h: 34, color: 'var(--track-cursor)' },
   { id: 'clicks', label: 'Clicks', h: 28, color: 'var(--track-click)' },
+  { id: 'highlights', label: 'Highlights', h: 36, color: '#ffcc00' },
   { id: 'narration', label: 'Narration', h: 54, color: 'var(--track-narration-border)' },
   { id: 'music', label: 'Music', h: 40, color: 'var(--track-music-border)' },
 ] as const;
@@ -281,6 +283,7 @@ export function Timeline() {
             <VideoTrack project={project} pps={pps} selection={selection} thumbnails={thumbnails} gesture={gesture} onEmptyDown={onEmptyDown} menu={menu} />
             <CursorTrack project={project} pps={pps} selection={selection} gesture={gesture} onEmptyDown={onEmptyDown} menu={menu} timeFromClient={timeFromClient} />
             <ClickTrack project={project} pps={pps} selection={selection} gesture={gesture} onEmptyDown={onEmptyDown} menu={menu} timeFromClient={timeFromClient} />
+            <HighlightTrack project={project} pps={pps} selection={selection} gesture={gesture} onEmptyDown={onEmptyDown} menu={menu} />
             {(['narration', 'music'] as AudioTrackId[]).map((tr) => (
               <AudioTrack key={tr} track={tr} project={project} pps={pps} selection={selection} waveforms={waveforms} viewport={viewport} gesture={gesture} onEmptyDown={onEmptyDown} menu={menu} assets={assets} />
             ))}
@@ -432,7 +435,7 @@ interface TrackProps {
   menu: ReturnType<typeof useContextMenu>;
 }
 
-function selectWith(kind: 'segment' | 'audio' | 'keyframe' | 'click' | 'visibility', id: string, e: { shiftKey: boolean; metaKey: boolean }) {
+function selectWith(kind: import('../state/store').SelectionKind, id: string, e: { shiftKey: boolean; metaKey: boolean }) {
   const s = editor().selection;
   if ((e.shiftKey || e.metaKey) && s.kind === kind) {
     const ids = s.ids.includes(id) ? s.ids.filter((x) => x !== id) : [...s.ids, id];
@@ -630,9 +633,22 @@ function CursorTrack({ project, pps, selection, gesture, onEmptyDown, menu, time
     }
     if (!state) hidden.push([from, Number.MAX_SAFE_INTEGER / 4]);
   }
+  // Ranges where "hide when idle" fades the cursor out completely.
+  const idle: [number, number][] = [];
+  if (project.cursor.style.autoHide && kfs.length) {
+    let from = 0;
+    for (const w of autoHideWindows(project.cursor, aspect)) {
+      if (w.start - AUTO_HIDE_FADE > from) idle.push([from, w.start - AUTO_HIDE_FADE]);
+      from = w.end + AUTO_HIDE_FADE;
+    }
+    idle.push([from, Number.MAX_SAFE_INTEGER / 4]);
+  }
 
   return (
     <div className="track lane-alt" style={{ height: TRACKS[1].h }} onPointerDown={onEmptyDown} onDoubleClick={onDouble} onContextMenu={onMenu}>
+      {idle.map(([a, b], i) => (
+        <div key={`idle${i}`} style={{ position: 'absolute', top: 8, bottom: 8, left: toPx(a, pps), width: Math.min(toPx(b - a, pps), 1e6), background: 'rgba(0,0,0,0.22)', borderRadius: 3, pointerEvents: 'none' }} title="Cursor auto-hidden (idle)" />
+      ))}
       {hidden.map(([a, b], i) => (
         <div key={i} style={{ position: 'absolute', top: 3, bottom: 3, left: toPx(a, pps), width: Math.min(toPx(b - a, pps), 1e6), background: 'repeating-linear-gradient(90deg, rgba(0,0,0,0.25) 0 4px, transparent 4px 8px)', pointerEvents: 'none' }} title="Cursor hidden" />
       ))}
@@ -735,6 +751,8 @@ function ClickTrack({ project, pps, selection, gesture, onEmptyDown, menu, timeF
               { label: 'Double Click', run: () => setButton(c.id, 'double') },
               { label: 'Right Click', run: () => setButton(c.id, 'right') },
               { separator: true, label: '' },
+              { label: 'Highlight This Click', run: () => highlightClick(c.id) },
+              { separator: true, label: '' },
               { label: 'Delete', shortcut: '⌫', danger: true, run: deleteSelection },
             ]);
           }}
@@ -742,6 +760,87 @@ function ClickTrack({ project, pps, selection, gesture, onEmptyDown, menu, timeF
           <i>{c.button === 'double' ? '2' : c.button === 'right' ? 'R' : ''}</i>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------ highlights track
+
+function HighlightTrack({ project, pps, selection, gesture, onEmptyDown, menu }: TrackProps) {
+  const h = TRACKS.find((t) => t.id === 'highlights')!.h;
+  const sel = new Set(selection.kind === 'highlight' ? selection.ids : []);
+  // Greedy row packing so overlapping highlights stay readable (2 rows).
+  const sorted = [...project.highlights].sort((a, b) => a.start - b.start);
+  const rowEnd = [-Infinity, -Infinity];
+  const rows = new Map<string, number>();
+  for (const x of sorted) {
+    const r = rowEnd[0] <= x.start ? 0 : rowEnd[1] <= x.start ? 1 : rowEnd[0] <= rowEnd[1] ? 0 : 1;
+    rows.set(x.id, r);
+    rowEnd[r] = x.end;
+  }
+  const start = (e: React.PointerEvent, id: string, edge: 'move' | 'start' | 'end') => {
+    selectWith('highlight', id, e);
+    const ids = edge === 'move' && editor().selection.kind === 'highlight' ? editor().selection.ids : [id];
+    const base = editor().project;
+    const b0 = new Map(base.highlights.map((x) => [x.id, x]));
+    const me = b0.get(id)!;
+    const MIN = frameDuration(base.export.fps) * 6;
+    gesture(e, {
+      exclude: new Set(ids),
+      onMove: (dt, _ev, snap) => {
+        if (edge === 'move') {
+          const s0 = snap(me.start + dt);
+          const e0 = snap(me.end + dt) - (me.end - me.start);
+          const ns = Math.abs(s0 - (me.start + dt)) <= Math.abs(e0 - (me.start + dt)) ? s0 : e0;
+          const d = snapToFrame(Math.max(0, ns), base.export.fps) - me.start;
+          editor().preview((p) => ({ ...p, highlights: p.highlights.map((x) => (ids.includes(x.id) ? { ...x, start: Math.max(0, b0.get(x.id)!.start + d), end: Math.max(MIN, b0.get(x.id)!.end + d) } : x)) }));
+        } else if (edge === 'start') {
+          const t = Math.min(me.end - MIN, Math.max(0, snapToFrame(snap(me.start + dt), base.export.fps)));
+          editor().preview((p) => ({ ...p, highlights: p.highlights.map((x) => (x.id === id ? { ...x, start: t } : x)) }));
+        } else {
+          const t = Math.max(me.start + MIN, snapToFrame(snap(me.end + dt), base.export.fps));
+          editor().preview((p) => ({ ...p, highlights: p.highlights.map((x) => (x.id === id ? { ...x, end: t } : x)) }));
+        }
+      },
+      onEnd: (moved) => {
+        // Click: jump to where the highlight is fully drawn so it can be edited in the preview.
+        if (!moved && edge === 'move') player.seek(Math.min(me.end - 1, me.start + (INTRO_DURATION[me.intro] ?? 0)));
+      },
+    });
+  };
+  return (
+    <div className="track lane-alt" style={{ height: h }} onPointerDown={onEmptyDown}>
+      {project.highlights.map((x) => {
+        const label = HIGHLIGHT_SHAPES.find((s) => s.id === x.shape)?.label ?? x.shape;
+        const top = 1 + (rows.get(x.id) ?? 0) * 17;
+        return (
+          <div
+            key={x.id}
+            className={`hl-bar ${sel.has(x.id) ? 'selected' : ''}`}
+            style={{ left: toPx(x.start, pps), width: Math.max(6, toPx(x.end - x.start, pps)), top, background: `${x.color}55`, borderColor: x.color }}
+            title={`${label} highlight · ${flicksToSeconds(x.start).toFixed(2)}s → ${flicksToSeconds(x.end).toFixed(2)}s`}
+            onPointerDown={(e) => start(e, x.id, 'move')}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              selectWith('highlight', x.id, { shiftKey: false, metaKey: false });
+              menu(e, [
+                { label: 'Duplicate', shortcut: '⌘D', run: duplicateSelection },
+                { label: 'Delete', shortcut: '⌫', danger: true, run: deleteSelection },
+              ]);
+            }}
+          >
+            <span>{label}</span>
+            <div className="trim-handle l" onPointerDown={(e) => start(e, x.id, 'start')} />
+            <div className="trim-handle r" onPointerDown={(e) => start(e, x.id, 'end')} />
+          </div>
+        );
+      })}
+      {project.highlights.length === 0 && (
+        <div className="hint" style={{ position: 'absolute', left: 10, top: 10, pointerEvents: 'none' }}>
+          Press <span className="kbd">H</span> and drag over the preview to highlight a button or area
+        </div>
+      )}
     </div>
   );
 }

@@ -177,7 +177,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate {
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: bitrate,
                 AVVideoExpectedSourceFrameRateKey: config.fps,
-                AVVideoMaxKeyFrameIntervalKey: config.fps * 2,
+                // Keyframe every second keeps full-resolution seeks in the editor fast.
+                AVVideoMaxKeyFrameIntervalKey: config.fps,
                 AVVideoAllowFrameReorderingKey: false,
             ] as [String: Any],
             AVVideoColorPropertiesKey: [

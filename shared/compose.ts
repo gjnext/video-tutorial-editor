@@ -4,7 +4,8 @@
  *
  * Layer order (docs/COMPOSITION_SPEC.md §4):
  *   1. background ops (static)        3. video layer (cropped, scaled, rounded)
- *   2. video drop shadow              4. cursor highlight halo
+ *   2. video drop shadow              3b. highlight annotations (clipped to video)
+ *                                     4. cursor highlight halo
  *                                     5. synthetic cursor
  *                                     6. click effects
  * Layers 4–6 ("overlay") are optionally clipped to the video's rounded rect.
@@ -13,6 +14,7 @@ import type { MediaAsset, Project } from './schema';
 import { parseColor, withAlpha, type RGBA } from './color';
 import { computeVideoPlacement, sourceToCanvas, type Rect, type Size, type VideoPlacement } from './geometry';
 import { mapProjectTime } from './timeline';
+import { highlightOps } from './highlights';
 import { evaluateClickEffects, evaluateCursor } from './cursor';
 import { easeOutCubic } from './easing';
 import { CURSOR_BASE_HEIGHT, CURSOR_THEMES, cursorPixelsPerUnit } from './cursorThemes';
@@ -35,6 +37,9 @@ export interface VideoDraw {
 export interface FrameDescription {
   t: Flicks;
   video: VideoDraw | null;
+  /** Highlight annotations, drawn above the video and below the cursor, clipped to the video. */
+  highlights: DrawOp[];
+  highlightClip: ClipRect | null;
   overlay: DrawOp[];
   overlayClip: ClipRect | null;
 }
@@ -109,7 +114,8 @@ export function cursorOverlayOps(p: Project, t: Flicks, canvas: Size, placement:
       const hc = parseColor(style.highlightColor);
       ops.push({ op: 'circle', cx: pt.x, cy: pt.y, r: unitScale * 9, fill: withAlpha(hc, 0.34 * alpha) });
     }
-    ops.push({ op: 'cursor', theme: theme.id, x: pt.x, y: pt.y, scale: unitScale * st.pressScale, alpha, shadow: style.shadow });
+    const outline = style.customOutline ? { stroke: parseColor(style.outlineColor), lineWidth: Math.max(0, Math.min(6, style.outlineWidth)) } : {};
+    ops.push({ op: 'cursor', theme: theme.id, x: pt.x, y: pt.y, scale: unitScale * st.pressScale, alpha, shadow: style.shadow, ...outline });
   }
 
   const R = 2.1 * CURSOR_BASE_HEIGHT * canvas.height * style.size;
@@ -132,7 +138,7 @@ export function cursorOverlayOps(p: Project, t: Flicks, canvas: Size, placement:
 export function composeFrame(p: Project, t: Flicks, canvas: Size, assets?: Map<string, MediaAsset>): FrameDescription {
   const map = assets ?? assetMap(p.media);
   const m = mapProjectTime(p.video.segments, t);
-  if (!m) return { t, video: null, overlay: [], overlayClip: null };
+  if (!m) return { t, video: null, highlights: [], highlightClip: null, overlay: [], overlayClip: null };
   const asset = map.get(m.assetId);
   const placement = placementFor(p, asset, canvas);
   const video: VideoDraw = {
@@ -147,5 +153,7 @@ export function composeFrame(p: Project, t: Flicks, canvas: Size, assets?: Map<s
   const aspect = cursorSpaceAspect(p, map);
   const overlay = cursorOverlayOps(p, t, canvas, placement, aspect);
   const overlayClip = p.cursor.style.clipToVideo ? { ...placement.dest, radius: placement.radius } : null;
-  return { t, video, overlay, overlayClip };
+  const highlights = highlightOps(p.highlights ?? [], t, placement, canvas);
+  const highlightClip = highlights.length ? { ...placement.dest, radius: placement.radius } : null;
+  return { t, video, highlights, highlightClip, overlay, overlayClip };
 }

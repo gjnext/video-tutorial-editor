@@ -31,6 +31,7 @@ const api: StudioAPI = {
     pathForFile: (file) => webUtils.getPathForFile(file),
     url: (p) => `studio-media://local/${encodeURIComponent(p)}`,
     thumbnails: (asset) => ipcRenderer.invoke('media:thumbnails', asset),
+    proxy: (asset) => ipcRenderer.invoke('media:proxy', asset),
     relink: (asset) => ipcRenderer.invoke('media:relink', asset),
   },
   recording: {

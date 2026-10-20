@@ -76,6 +76,14 @@ struct DrawOp: Decodable {
     var scale: Double?
     var alpha: Double?
     var shadow: Bool?
+    // poly (highlights)
+    var points: [Double]?
+    var closed: Bool?
+    var holes: [[Double]]?
+    var dash: [Double]?
+    var cap: String?
+    var join: String?
+    var glow: ShadowOp?
 }
 
 struct ClipRect: Decodable {
@@ -99,6 +107,8 @@ struct VideoDraw: Decodable {
 struct FrameDescription: Decodable {
     let t: Int64
     let video: VideoDraw?
+    let highlights: [DrawOp]?
+    let highlightClip: ClipRect?
     let overlay: [DrawOp]
     let overlayClip: ClipRect?
 }

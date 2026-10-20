@@ -202,13 +202,71 @@ export function evaluateCursorPosition(
   return { x: last.x, y: last.y, moving: false, active: kf.length - 1 };
 }
 
+// ---------------------------------------------------------------- auto-hide when idle
+
+/** Cursor appears this long before a move/click begins (fully visible at that moment). */
+export const AUTO_HIDE_LEAD: Flicks = msToFlicks(150);
+/** Fade duration for auto-hide in/out. */
+export const AUTO_HIDE_FADE: Flicks = msToFlicks(250);
+
+export interface ActivityWindow {
+  /** Fully visible from `start` to `end`; fades in before and out after. */
+  start: Flicks;
+  end: Flicks;
+}
+
+/**
+ * Activity = movements between keyframes and clicks (including their effect).
+ * With auto-hide on, the cursor is fully visible from AUTO_HIDE_LEAD before an
+ * activity until `autoHideDelay` after it, fading over AUTO_HIDE_FADE on both sides.
+ * Overlapping/nearby windows merge, so the cursor never flickers between actions.
+ */
+export function autoHideWindows(track: CursorTrack, sourceAspect: number): ActivityWindow[] {
+  const delay = Math.round(Math.max(0, track.style.autoHideDelay) * FLICKS_PER_SECOND);
+  const raw: [Flicks, Flicks][] = [];
+  const kf = sortByTime(track.keyframes);
+  for (let i = 1; i < kf.length; i++) {
+    const mv = resolveMove(kf[i - 1], kf[i], sourceAspect);
+    if (mv.end > mv.start || kf[i].x !== kf[i - 1].x || kf[i].y !== kf[i - 1].y) raw.push([mv.start, mv.end]);
+  }
+  for (const c of track.clicks) {
+    const last = c.button === 'double' ? c.time + DOUBLE_CLICK_GAP : c.time;
+    raw.push([c.time - PRESS_LEAD, last + CLICK_EFFECT_DURATION]);
+  }
+  raw.sort((a, b) => a[0] - b[0]);
+  const out: ActivityWindow[] = [];
+  for (const [a, b] of raw) {
+    const w = { start: a - AUTO_HIDE_LEAD, end: b + delay };
+    const prev = out[out.length - 1];
+    // Merge when the gap would not even allow a full fade out and back in.
+    if (prev && w.start - prev.end <= 2 * AUTO_HIDE_FADE) prev.end = Math.max(prev.end, w.end);
+    else out.push(w);
+  }
+  return out;
+}
+
+/** 0..1 auto-hide factor at time t (1 when auto-hide is off). */
+export function evaluateAutoHide(track: CursorTrack, t: Flicks, sourceAspect: number, windows?: ActivityWindow[]): number {
+  if (!track.style.autoHide) return 1;
+  let v = 0;
+  for (const w of windows ?? autoHideWindows(track, sourceAspect)) {
+    let x: number;
+    if (t >= w.start && t <= w.end) x = 1;
+    else if (t < w.start) x = 1 - (w.start - t) / AUTO_HIDE_FADE;
+    else x = 1 - (t - w.end) / AUTO_HIDE_FADE;
+    if (x > v) v = x;
+    if (v >= 1) return 1;
+  }
+  return Math.max(0, v);
+}
+
 export function evaluateCursor(track: CursorTrack, t: Flicks, sourceAspect: number): CursorState | null {
   const pos = evaluateCursorPosition(track.keyframes, t, sourceAspect);
   if (!pos) return null;
   return {
     x: pos.x,
     y: pos.y,
-    visibility: evaluateVisibility(track.visibility, t),
+    visibility: evaluateVisibility(track.visibility, t) * evaluateAutoHide(track, t, sourceAspect),
     pressScale: track.style.pressAnimation ? evaluatePressScale(track.clicks, t) : 1,
     moving: pos.moving,
     activeKeyframe: pos.active,

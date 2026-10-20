@@ -19,7 +19,8 @@
     "package": "npm run build && electron-builder --mac dir --arm64 && node scripts/verify-package.mjs",
     "package:dmg": "npm run build && electron-builder --mac dmg --arm64",
     "test:e2e": "npm run build && node tests/e2e/scenario.mjs",
-    "test:all": "npm run build:native && vitest run && npm run test:e2e"
+    "test:all": "npm run build:native && vitest run && npm run test:e2e",
+    "test:perf": "npm run build && node tests/e2e/perf.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

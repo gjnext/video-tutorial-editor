@@ -111,6 +111,14 @@ overlay, warning in the inspector).
 * **Before the first / after the last keyframe** the cursor holds that position.
 * **Visibility**: show/hide events; the state before the first event is its
   opposite; 160 ms linear fade.
+* **Hide when idle** (`style.autoHide`, `autoHideDelay`): activity = each movement
+  interval plus each click (`time − 60 ms` … last press `+ 520 ms`). The cursor is fully
+  visible from 150 ms before an activity until `autoHideDelay` after it, with 250 ms linear
+  fades; windows closer than two fades merge (no flicker). The factor multiplies the
+  show/hide-event visibility, so explicit hide markers still win. Fully hidden → no cursor op.
+* **Outline override** (`style.customOutline`, `outlineColor`, `outlineWidth` in cursor units,
+  clamped 0–6): replaces the stroke color/width of the theme's outline layers; 0 removes it.
+  Carried on the cursor op as `stroke`/`lineWidth`; fills are unchanged.
 * **Clicks** `{ time, button }` happen wherever the cursor is at that time.
   Press animation: scale `1 − 0.14·sin(π·p)` over 240 ms starting 60 ms before the
   click. Double click = two presses 150 ms apart.
@@ -137,6 +145,27 @@ Primitive semantics (`shared/drawOps.ts`):
 * Cursor: layers composited as a group, then shadow and alpha applied once.
 * Ripple: ring radius `R·(0.25+0.75·easeOutCubic(p))`, R = `2.1·0.03·H·size`, 520 ms;
   right clicks use amber.
+
+### 4.1 Highlights
+
+A highlight `{start, end, shape, x, y, w, h, color, line, thickness, fill, glow, cornerRadius, dim, intro}`
+(`shared/highlights.ts`) is stored in source-normalized coordinates — a box for
+rect/ellipse/spotlight, a line (x,y)→(x+w,y+h) for underline/arrow (tip at the end) — so it
+stays on the element through crop/layout/resolution changes. It is visible on `[start, end)`,
+drawn above the video and below the cursor, clipped to the video's rounded rect, and ripples
+with the cursor setting.
+
+All shapes are converted in TypeScript into `poly` ops (polylines/polygons with optional
+even-odd holes, dash, cap/join, glow), so renderers only stroke and fill points:
+* rect: rounded-rect polygon (8 samples per corner); ellipse: 96 samples; start top-left/top, clockwise.
+* thickness = `thickness/1000 · H`; line styles: dashed `[3w, 2w]`, dotted `[ε, 2.2w]` round caps,
+  marker = 2.6× width at 45 % alpha, sketch = deterministic low-frequency wobble seeded by the id
+  (two passes, slight overshoot), resolution independent.
+* glow = halo stroke (3.4× width, 22 % alpha) beneath + shadow blur `max(6, 4w)` in the color.
+* spotlight = 6 stacked dim layers whose holes grow by up to `0.018 · H` (feathered edge),
+  per-layer alpha `1 − (1 − dim)^(1/6)`.
+* intro: draw = arc-length trim over 450 ms (ease-out cubic; arrow shaft 75 %, then head),
+  fade 250 ms, pop = scale 0.85→1 + fade over 300 ms; outro: linear fade over the last 250 ms.
 
 ## 5. Audio
 

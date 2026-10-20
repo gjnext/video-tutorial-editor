@@ -110,28 +110,31 @@ final class Compositor {
             img = img.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: out, kCIInputMaskImageKey: mask])
             out = img.cropped(to: out.extent)
         }
-        if !f.overlay.isEmpty, let overlay = overlayImage(f) {
+        if let hl = f.highlights, !hl.isEmpty, let img = layerImage(hl, clip: f.highlightClip) {
+            out = img.composited(over: out)
+        }
+        if !f.overlay.isEmpty, let overlay = layerImage(f.overlay, clip: f.overlayClip) {
             out = overlay.composited(over: out)
         }
         return out
     }
 
-    /// Draw cursor/effects into a small bitmap covering only their bounds.
-    private func overlayImage(_ f: FrameDescription) -> CIImage? {
+    /// Draw ops (highlights, cursor, effects) into a small bitmap covering only their bounds.
+    private func layerImage(_ ops: [DrawOp], clip: ClipRect?) -> CIImage? {
         var bounds = CGRect.null
-        for op in f.overlay { bounds = bounds.union(executor.bounds(op)) }
+        for op in ops { bounds = bounds.union(executor.bounds(op)) }
         bounds = bounds.intersection(CGRect(x: 0, y: 0, width: width, height: height))
-        if let c = f.overlayClip { bounds = bounds.intersection(CGRect(x: c.x, y: c.y, width: c.w, height: c.h)) }
+        if let c = clip { bounds = bounds.intersection(CGRect(x: c.x, y: c.y, width: c.w, height: c.h)) }
         if bounds.isNull || bounds.isEmpty { return nil }
         bounds = bounds.integral
         guard let ctx = makeTopLeftContext(width: Int(bounds.width), height: Int(bounds.height)) else { return nil }
         ctx.translateBy(x: -bounds.minX, y: -bounds.minY)
-        if let c = f.overlayClip {
+        if let c = clip {
             ctx.addPath(CGPath(roundedRect: CGRect(x: c.x, y: c.y, width: c.w, height: c.h), cornerWidth: c.radius, cornerHeight: c.radius, transform: nil))
             ctx.clip()
         }
         let size = CGSize(width: width, height: height)
-        for op in f.overlay { executor.run(op, in: ctx, canvas: size) }
+        for op in ops { executor.run(op, in: ctx, canvas: size) }
         guard let cg = ctx.makeImage() else { return nil }
         return CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: bounds.minX, y: CGFloat(height) - bounds.maxY))
     }

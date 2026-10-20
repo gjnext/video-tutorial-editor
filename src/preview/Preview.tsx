@@ -4,7 +4,7 @@
  * in device pixels, then layers an SVG editing overlay on top.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crop as CropIcon, Maximize, MousePointer2, Move, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
+import { Crop as CropIcon, Highlighter, Maximize, MousePointer2, Move, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
 import { backgroundOps } from '../../shared/backgrounds';
 import { assetMap, composeFrame, cursorSpaceAspect, placementFor } from '../../shared/compose';
 import { canvasToSource, fitRect, isInsideCrop, sourceToCanvas, type Point, type Rect, type Size } from '../../shared/geometry';
@@ -20,6 +20,8 @@ import { imageFor } from '../engine/mediaCache';
 import { Button, Segmented } from '../components/ui';
 import { stepFrames, seekToEdge, fps } from '../state/actions';
 import { Welcome } from './Welcome';
+import { perf } from '../engine/perf';
+import { HighlightBar, HighlightLayer } from './HighlightLayer';
 
 type ZoomLevel = 'fit' | 1.5 | 2 | 3;
 
@@ -60,6 +62,18 @@ export function Preview() {
   const draw = useCallback(() => {
     const cv = canvasRef.current;
     if (!cv) return;
+    const t0 = performance.now();
+    try {
+      drawInner(cv);
+    } finally {
+      const ms = performance.now() - t0;
+      perf.draws++;
+      perf.drawMs += ms;
+      perf.maxDrawMs = Math.max(perf.maxDrawMs, ms);
+    }
+  }, [canvasSize.width, canvasSize.height]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const drawInner = (cv: HTMLCanvasElement) => {
     const s = editor();
     const p = s.project;
     if (cv.width !== canvasSize.width || cv.height !== canvasSize.height) {
@@ -92,14 +106,24 @@ export function Preview() {
     }
     ctx.drawImage(bgCache.current.canvas, 0, 0);
     const f = composeFrame(p, t, { width: W, height: H }, assets);
-    if (f.video) drawVideo(ctx, f.video, player.frameFor(f.video.assetId));
+    if (f.video) {
+      const frame = player.frameFor(f.video.assetId);
+      if (!frame) perf.blankDraws++;
+      drawVideo(ctx, f.video, frame);
+    }
+    if (f.highlights.length) {
+      ctx.save();
+      clipTo(ctx, f.highlightClip);
+      runOps(ctx, f.highlights, W, H);
+      ctx.restore();
+    }
     if (f.overlay.length) {
       ctx.save();
       clipTo(ctx, f.overlayClip);
       runOps(ctx, f.overlay, W, H);
       ctx.restore();
     }
-  }, [canvasSize.width, canvasSize.height]);
+  };
 
   const rafRef = useRef(0);
   const requestDraw = useCallback(() => {
@@ -140,6 +164,7 @@ export function Preview() {
           options={[
             { value: 'select', label: <><Move size={13} /> Arrange</>, tip: 'Select and position the video (V)' },
             { value: 'cursor', label: <><MousePointer2 size={13} /> Cursor</>, tip: 'Click the video to place the synthetic cursor (K)' },
+            { value: 'highlight', label: <><Highlighter size={13} /> Highlight</>, tip: 'Drag on the video to highlight a button, field or area (H)' },
             { value: 'crop', label: <><CropIcon size={13} /> Crop</>, tip: 'Drag handles to crop the recording (R)' },
           ]}
         />
@@ -159,6 +184,7 @@ export function Preview() {
           ]}
         />
       </div>
+      {hasVideo && (mode === 'highlight' || selection.kind === 'highlight') && <HighlightBar />}
       <div
         className="stage-body"
         ref={bodyRef}
@@ -190,8 +216,17 @@ export function Preview() {
                 time={t}
               />
             )}
+            {hasVideo && placement && mode !== 'crop' && (
+              <HighlightLayer project={project} mode={mode} placement={placement} canvasSize={canvasSize} display={display} fromEvent={fromEvent} time={t} />
+            )}
           </div>
         </div>
+
+        {hasVideo && mode === 'highlight' && selection.kind !== 'highlight' && (
+          <div className="mode-hint">
+            Drag over a button, field or area to highlight it · a click places a default size · <b>Esc</b> when done
+          </div>
+        )}
         {hasVideo && mode === 'cursor' && (
           <div className="mode-hint">
             Click the video to place the cursor at <b>{formatTimecode(t, project.export.fps)}</b> · drag points to adjust · <span className="kbd">⌥</span>-click also adds a click
@@ -216,7 +251,7 @@ export function Preview() {
     const a = assetMap(p.media).get(m.assetId);
     const frame = player.frameFor(m.assetId);
     const r = cropModeRect(a?.width ?? 1920, a?.height ?? 1080, W, H);
-    if (frame) ctx.drawImage(frame, r.x, r.y, r.w, r.h);
+    if (frame) ctx.drawImage(frame.image, r.x, r.y, r.w, r.h);
   }
 }
 
@@ -358,7 +393,7 @@ function Overlay(props: OverlayProps) {
       width={display.w}
       height={display.h}
       style={{ cursor: mode === 'cursor' ? 'crosshair' : mode === 'select' ? 'default' : 'default' }}
-      onPointerDown={mode === 'crop' ? undefined : onBackgroundDown}
+      onPointerDown={mode === 'crop' || mode === 'highlight' ? undefined : onBackgroundDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}

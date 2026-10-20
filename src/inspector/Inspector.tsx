@@ -6,14 +6,15 @@ import { isInsideCrop } from '../../shared/geometry';
 import { cursorSpaceAspect } from '../../shared/compose';
 import { applySegmentEdit, placeSegments, setFreezeDuration, trimSegment } from '../../shared/timeline';
 import { trimAudioClip, clipEnd } from '../../shared/audio';
-import { CURSOR_THEME_LIST } from '../../shared/cursorThemes';
+import { CURSOR_THEME_LIST, CURSOR_THEMES } from '../../shared/cursorThemes';
 import { flicksToSeconds, secondsToFlicks, snapToFrame, formatTimecode, type Flicks } from '../../shared/time';
-import type { BezierControls, CursorKeyframe, CursorStyle, EasingPreset, Project, VideoLayout } from '../../shared/schema';
+import type { BezierControls, CursorKeyframe, CursorStyle, EasingPreset, Highlight, HighlightLine, HighlightShape, Project, VideoLayout } from '../../shared/schema';
+import { applyStyle, HIGHLIGHT_COLORS, HIGHLIGHT_SHAPES, HIGHLIGHT_STYLES, INTRO_DURATION, isLineShape } from '../../shared/highlights';
 import { editor, useEditor } from '../state/store';
 import { usePlayheadTime } from '../state/playhead';
 import { player } from '../engine/player';
 import { Button, ColorInput, Field, NumberField, Section, Segmented, SliderField, Toggle, Warning } from '../components/ui';
-import { addPause, addVisibility } from '../state/actions';
+import { addPause, addVisibility, updateHighlights } from '../state/actions';
 import { runOp } from '../engine/canvasOps';
 
 const g = () => editor();
@@ -63,6 +64,9 @@ export function Inspector() {
         <VideoStyleInspector project={project} />
       </>
     );
+  } else if (selection.kind === 'highlight' && selection.ids.length) {
+    title = selection.ids.length > 1 ? `${selection.ids.length} Highlights` : 'Highlight';
+    body = <HighlightInspector project={project} ids={selection.ids} />;
   } else if (selection.kind === 'audio' && selection.ids.length) {
     title = 'Audio Clip';
     body = <AudioInspector project={project} id={selection.ids[0]} />;
@@ -536,6 +540,26 @@ export function CursorStyleInspector({ project, only }: { project: Project; only
         </div>
         <SliderField label="Size" value={st.size} min={0.5} max={2.5} step={0.05} scale={100} unit="%" onChange={(v) => set({ size: v }, true)} />
         <SliderField label="Opacity" value={st.opacity} min={0.1} max={1} step={0.01} scale={100} unit="%" onChange={(v) => set({ opacity: v }, true)} />
+        <Field label="Outline">
+          <Segmented
+            small
+            value={st.customOutline ? 'custom' : 'theme'}
+            onChange={(v) => {
+              if (v === 'theme') return set({ customOutline: false });
+              // Start from the current theme's outline so switching is seamless.
+              const layer = CURSOR_THEMES[st.theme]?.layers.find((l) => l.stroke);
+              set({ customOutline: true, outlineColor: layer?.stroke ?? st.outlineColor, outlineWidth: layer?.lineWidth ?? st.outlineWidth });
+            }}
+            options={[
+              { value: 'theme', label: 'Theme' },
+              { value: 'custom', label: 'Custom' },
+            ]}
+          />
+          {st.customOutline && <ColorInput value={st.outlineColor} onChange={(v) => set({ outlineColor: v })} />}
+        </Field>
+        {st.customOutline && (
+          <SliderField label="Thickness" value={st.outlineWidth} min={0} max={6} step={0.1} precision={1} unit="" onChange={(v) => set({ outlineWidth: v }, true)} />
+        )}
         <Field label="Shadow">
           <Toggle checked={st.shadow} onChange={(v) => set({ shadow: v })} />
         </Field>
@@ -547,6 +571,19 @@ export function CursorStyleInspector({ project, only }: { project: Project; only
           <Toggle checked={st.clipToVideo} onChange={(v) => set({ clipToVideo: v })} />
           <span className="hint">hide outside the recording</span>
         </Field>
+      </Section>
+      <Section title="Visibility">
+        <Field label="Hide when idle">
+          <Toggle checked={st.autoHide} onChange={(v) => set({ autoHide: v })} label="Hide when idle" />
+        </Field>
+        {st.autoHide && (
+          <SliderField label="Hide after" value={st.autoHideDelay} min={0.2} max={5} step={0.1} precision={1} unit="s" onChange={(v) => set({ autoHideDelay: v }, true)} />
+        )}
+        <div className="hint">
+          {st.autoHide
+            ? `The cursor fades out ${st.autoHideDelay.toFixed(1)}s after it stops moving or clicking, and fades back in just before its next move. Show/hide markers still apply.`
+            : 'The cursor stays visible while resting. Turn this on to fade it out between actions.'}
+        </div>
       </Section>
       {effects}
       <Section title="Quick actions">
@@ -681,3 +718,77 @@ function AudioInspector({ project, id }: { project: Project; id: string }) {
   );
 }
 
+
+// ------------------------------------------------------------ highlights
+
+function HighlightInspector({ project, ids }: { project: Project; ids: string[] }) {
+  const h = project.highlights.find((x) => x.id === ids[0]);
+  if (!h) return null;
+  const set = (patch: Partial<Highlight>, gesture = false) => updateHighlights(ids, () => patch, gesture);
+  const line = isLineShape(h.shape);
+  const dur = h.end - h.start;
+  return (
+    <>
+      <Section title="Shape" right={<Button size="small" variant="ghost" onClick={() => player.seek(Math.min(h.end - 1, h.start + (INTRO_DURATION[h.intro] ?? 0)))}>Go to</Button>}>
+        <Field label="Shape">
+          <select className="select" value={h.shape} onChange={(e) => set({ shape: e.target.value as HighlightShape })}>
+            {HIGHLIGHT_SHAPES.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="style-grid">
+          {HIGHLIGHT_STYLES.map((st) => (
+            <Button key={st.id} size="small" onClick={() => updateHighlights(ids, (x) => applyStyle(x, st))}>
+              <span className="dot-swatch" style={{ background: st.color }} /> {st.label}
+            </Button>
+          ))}
+        </div>
+        <div className="hint">Drag the box or its handles in the preview to reposition. Positions stick to the recording through crop and layout changes.</div>
+      </Section>
+      <Section title="Look">
+        <Field label="Color">
+          {HIGHLIGHT_COLORS.map((c) => (
+            <button key={c} className="color-dot" aria-pressed={h.color.toLowerCase() === c} style={{ background: c }} onClick={() => set({ color: c })} title={c} />
+          ))}
+          <ColorInput value={h.color} onChange={(v) => set({ color: v })} />
+        </Field>
+        {h.shape !== 'spotlight' || h.thickness > 0 ? (
+          <Field label="Line">
+            <select className="select" value={h.line} onChange={(e) => set({ line: e.target.value as HighlightLine })}>
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="dotted">Dotted</option>
+              <option value="marker">Highlighter marker</option>
+              <option value="sketch">Hand-drawn</option>
+            </select>
+          </Field>
+        ) : null}
+        <SliderField label={h.shape === 'spotlight' ? 'Outline' : 'Thickness'} value={h.thickness} min={0} max={14} step={0.25} precision={1} unit="" onChange={(v) => set({ thickness: v }, true)} />
+        {!line && h.shape !== 'spotlight' && <SliderField label="Fill" value={h.fill} min={0} max={0.6} step={0.01} scale={100} unit="%" onChange={(v) => set({ fill: v }, true)} />}
+        {h.shape === 'spotlight' && <SliderField label="Dim others" value={h.dim} min={0.1} max={0.9} step={0.01} scale={100} unit="%" onChange={(v) => set({ dim: v }, true)} />}
+        {(h.shape === 'rect' || h.shape === 'spotlight') && (
+          <SliderField label="Corners" value={h.cornerRadius} min={0} max={0.04} step={0.001} scale={1000} onChange={(v) => set({ cornerRadius: v }, true)} />
+        )}
+        <Field label="Glow">
+          <Toggle checked={h.glow} onChange={(v) => set({ glow: v })} />
+          <span className="hint">soft light around the line</span>
+        </Field>
+      </Section>
+      <Section title="Timing">
+        <Field label="Appears at">
+          <TimeField value={h.start} onChange={(t) => updateHighlights(ids, (x) => ({ start: t, end: Math.max(t + secondsToFlicks(0.2), x.end + (t - x.start)) }), true)} />
+        </Field>
+        <Field label="Duration">
+          <NumberField value={sec(dur)} min={0.2} max={600} step={0.1} precision={2} unit="s" onBegin={begin} onCommit={end} onChange={(v) => updateHighlights(ids, (x) => ({ end: x.start + secondsToFlicks(v) }), true)} />
+        </Field>
+        <Field label="Animation">
+          <Segmented small value={h.intro} onChange={(v) => set({ intro: v })} options={[{ value: 'draw', label: 'Draw' }, { value: 'fade', label: 'Fade' }, { value: 'pop', label: 'Pop' }, { value: 'none', label: 'None' }]} />
+        </Field>
+        <div className="hint">Fades out over the last 0.25 s. Freezes ripple highlights together with the cursor.</div>
+      </Section>
+    </>
+  );
+}

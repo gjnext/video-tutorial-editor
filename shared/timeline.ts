@@ -10,7 +10,7 @@
  * tracks live in PROJECT time and are never remapped by this module, except
  * through the explicit ripple helpers below.
  */
-import type { AudioClip, ClipSegment, CursorTrack, FreezeSegment, Project, VideoSegment } from './schema';
+import type { AudioClip, ClipSegment, CursorTrack, FreezeSegment, Highlight, Project, VideoSegment } from './schema';
 import { newId } from './schema';
 import type { Flicks } from './time';
 
@@ -291,6 +291,23 @@ export function rippleCursor(track: CursorTrack, shift: TimeShift): CursorTrack 
   };
 }
 
+/**
+ * Highlights are tied to what the recording shows, so they ripple with the
+ * cursor setting: those starting after `at` move; on removal, highlights
+ * entirely inside the removed range are dropped.
+ */
+export function rippleHighlights(items: Highlight[], shift: TimeShift): Highlight[] {
+  const { at, delta } = shift;
+  const removedEnd = delta < 0 ? at - delta : at;
+  const out: Highlight[] = [];
+  for (const h of items) {
+    if (delta < 0 && h.start > at && h.end <= removedEnd) continue;
+    if (delta < 0 ? h.start >= removedEnd : h.start > at) out.push({ ...h, start: Math.max(0, h.start + delta), end: Math.max(0, h.end + delta) });
+    else out.push(h);
+  }
+  return out;
+}
+
 /** Audio clips that start strictly after `at` move by `delta` (never before 0). */
 export function rippleAudio(clips: AudioClip[], shift: TimeShift): AudioClip[] {
   const { at, delta } = shift;
@@ -301,7 +318,7 @@ export function rippleAudio(clips: AudioClip[], shift: TimeShift): AudioClip[] {
 export function applySegmentEdit(p: Project, r: SegmentEditResult): Project {
   let next: Project = { ...p, video: { ...p.video, segments: r.segments } };
   if (r.shift && r.shift.delta !== 0) {
-    if (p.ripple.cursor) next = { ...next, cursor: rippleCursor(next.cursor, r.shift) };
+    if (p.ripple.cursor) next = { ...next, cursor: rippleCursor(next.cursor, r.shift), highlights: rippleHighlights(next.highlights ?? [], r.shift) };
     if (p.ripple.audio) next = { ...next, audio: rippleAudio(next.audio, r.shift) };
   }
   return next;
@@ -323,6 +340,11 @@ export function snapPoints(p: Project, exclude?: Set<string>): Flicks[] {
   }
   for (const k of p.cursor.keyframes) if (!exclude?.has(k.id)) pts.add(k.time);
   for (const k of p.cursor.clicks) if (!exclude?.has(k.id)) pts.add(k.time);
+  for (const h of p.highlights ?? []) {
+    if (exclude?.has(h.id)) continue;
+    pts.add(h.start);
+    pts.add(h.end);
+  }
   return [...pts].sort((a, b) => a - b);
 }
 

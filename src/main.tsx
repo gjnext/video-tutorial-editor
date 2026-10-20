@@ -11,9 +11,10 @@ import * as actions from './state/actions';
 import * as compose from '../shared/compose';
 import * as geometry from '../shared/geometry';
 import * as time from '../shared/time';
+import { perf } from './engine/perf';
 
 // Renderer-local debug handle (used by the automated e2e driver; grants no privileges).
-(window as unknown as Record<string, unknown>).__studioDebug = { editor, useEditor, playhead, player, actions, compose, geometry, time };
+(window as unknown as Record<string, unknown>).__studioDebug = { editor, useEditor, playhead, player, actions, compose, geometry, time, perf };
 
 const isHud = location.hash === '#hud';
 createRoot(document.getElementById('root')!).render(<StrictMode>{isHud ? <Hud /> : <App />}</StrictMode>);

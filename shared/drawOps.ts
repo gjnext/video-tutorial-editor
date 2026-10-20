@@ -35,8 +35,38 @@ export type DrawOp =
   | { op: 'line'; x0: number; y0: number; x1: number; y1: number; stroke: RGBA; lineWidth: number }
   /** Image asset: sample `src` (image pixels) into `dest` (canvas pixels). */
   | { op: 'image'; assetId: string; src: { x: number; y: number; w: number; h: number }; dest: { x: number; y: number; w: number; h: number } }
+  /**
+   * Generic polyline/polygon. `points` = [x0,y0,x1,y1,…]. `holes` are extra
+   * closed subpaths filled with the even-odd rule (spotlight). `dash` lengths
+   * in canvas px; `glow` is a shadow with zero offset in the given color.
+   */
+  | {
+      op: 'poly';
+      points: number[];
+      closed: boolean;
+      holes?: number[][];
+      fill?: RGBA;
+      stroke?: RGBA;
+      lineWidth?: number;
+      dash?: number[];
+      cap?: 'butt' | 'round';
+      join?: 'miter' | 'round';
+      glow?: ShadowOp;
+    }
   /** Synthetic cursor: theme layers placed with hotspot at (x,y), `scale` canvas px per cursor unit. */
-  | { op: 'cursor'; theme: CursorThemeId; x: number; y: number; scale: number; alpha: number; shadow: boolean };
+  | {
+      op: 'cursor';
+      theme: CursorThemeId;
+      x: number;
+      y: number;
+      scale: number;
+      alpha: number;
+      shadow: boolean;
+      /** Optional outline override: replaces the stroke color/width of the theme's outline layers. */
+      stroke?: RGBA;
+      /** Outline width in cursor units; 0 removes the outline. */
+      lineWidth?: number;
+    };
 
 export interface ClipRect {
   x: number;

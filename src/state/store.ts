@@ -10,13 +10,14 @@
 import { create } from 'zustand';
 import { createEmptyProject, type Project } from '../../shared/schema';
 import type { ThumbnailStrip } from '../../shared/ipc';
+import type { HighlightShape } from '../../shared/schema';
 
-export type SelectionKind = 'segment' | 'audio' | 'keyframe' | 'click' | 'visibility';
+export type SelectionKind = 'segment' | 'audio' | 'keyframe' | 'click' | 'visibility' | 'highlight';
 export interface Selection {
   kind: SelectionKind | null;
   ids: string[];
 }
-export type EditorMode = 'select' | 'cursor' | 'crop';
+export type EditorMode = 'select' | 'cursor' | 'crop' | 'highlight';
 export type InspectorTab = 'auto' | 'video' | 'cursor' | 'canvas';
 
 export interface Toast {
@@ -51,6 +52,9 @@ interface EditorState {
   pxPerSecond: number;
   timelineHeight: number;
   sidebarTab: 'media' | 'backgrounds' | 'layout' | 'cursor';
+  /** Current highlight tool (shape + style id) used when drawing new highlights. */
+  highlightShape: HighlightShape;
+  highlightStyle: string;
 
   thumbnails: Record<string, ThumbnailStrip>;
   waveforms: Record<string, Waveform>;
@@ -91,8 +95,10 @@ export const useEditor = create<EditorState>((set, get) => ({
   showPath: true,
   snapping: true,
   pxPerSecond: 80,
-  timelineHeight: 300,
+  timelineHeight: 330,
   sidebarTab: 'media',
+  highlightShape: 'rect',
+  highlightStyle: 'outline',
 
   thumbnails: {},
   waveforms: {},

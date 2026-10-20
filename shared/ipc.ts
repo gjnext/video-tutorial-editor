@@ -40,6 +40,14 @@ export interface ThumbnailStrip {
   height: number;
 }
 
+export interface ProxyInfo {
+  assetId: string;
+  /** studio-media:// URL of the scrub proxy. */
+  url: string;
+  width: number;
+  height: number;
+}
+
 export interface CaptureDisplay {
   id: number;
   width: number;
@@ -124,6 +132,7 @@ export interface StudioAPI {
     pathForFile(file: File): string;
     url(path: string): string;
     thumbnails(asset: MediaAsset): Promise<ThumbnailStrip>;
+    proxy(asset: MediaAsset): Promise<ProxyInfo>;
     relink(asset: MediaAsset): Promise<MediaAsset | null>;
   };
   recording: {

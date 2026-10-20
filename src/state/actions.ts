@@ -3,10 +3,11 @@
  * and toolbar buttons. All document changes go through store.commit() (one
  * undo step each) and are pure transformations from shared/.
  */
-import { createEmptyProject, newId, type AudioTrackId, type ClickButton, type CursorKeyframe, type MediaAsset, type Project } from '../../shared/schema';
+import { createEmptyProject, newId, type AudioTrackId, type ClickButton, type CursorKeyframe, type Highlight, type MediaAsset, type Project } from '../../shared/schema';
 import { appendClip, applySegmentEdit, deleteSegment, duplicateSegment, insertFreeze as insertFreezeEdit, mapProjectTime, placeSegments, projectDuration, splitAt } from '../../shared/timeline';
 import { clipEnd, createAudioClip, findFreeStart, splitAudioClip } from '../../shared/audio';
-import { sortByTime } from '../../shared/cursor';
+import { evaluateCursorPosition, sortByTime } from '../../shared/cursor';
+import { createHighlight, HIGHLIGHT_STYLES } from '../../shared/highlights';
 import { frameDuration, flicksToFrame, frameToFlicks, secondsToFlicks, type Flicks } from '../../shared/time';
 import { editor } from './store';
 import { playhead } from './playhead';
@@ -261,6 +262,8 @@ export function deleteSelection() {
           return { ...p, cursor: { ...p.cursor, clicks: p.cursor.clicks.filter((k) => !set.has(k.id)) } };
         case 'visibility':
           return { ...p, cursor: { ...p.cursor, visibility: p.cursor.visibility.filter((k) => !set.has(k.id)) } };
+        case 'highlight':
+          return { ...p, highlights: p.highlights.filter((h) => !set.has(h.id)) };
       }
       return p;
     },
@@ -306,6 +309,12 @@ export function duplicateSelection() {
         const add = p.cursor.clicks.filter((k) => ids.includes(k.id)).map((k) => ({ ...k, id: newId('clk'), time: k.time + offset }));
         newIds.push(...add.map((k) => k.id));
         return { ...p, cursor: { ...p.cursor, clicks: [...p.cursor.clicks, ...add] } };
+      }
+      case 'highlight': {
+        // Duplicates play right after the original.
+        const add = p.highlights.filter((h) => ids.includes(h.id)).map((h) => ({ ...h, id: newId('hl'), start: h.end, end: h.end + (h.end - h.start) }));
+        newIds.push(...add.map((h) => h.id));
+        return { ...p, highlights: [...p.highlights, ...add] };
       }
     }
     return p;
@@ -383,7 +392,7 @@ export function selectAll() {
   const kind = s.selection.kind ?? 'keyframe';
   const p = s.project;
   const ids =
-    kind === 'segment' ? p.video.segments.map((x) => x.id) : kind === 'audio' ? p.audio.map((x) => x.id) : kind === 'click' ? p.cursor.clicks.map((x) => x.id) : kind === 'visibility' ? p.cursor.visibility.map((x) => x.id) : p.cursor.keyframes.map((x) => x.id);
+    kind === 'highlight' ? p.highlights.map((x) => x.id) : kind === 'segment' ? p.video.segments.map((x) => x.id) : kind === 'audio' ? p.audio.map((x) => x.id) : kind === 'click' ? p.cursor.clicks.map((x) => x.id) : kind === 'visibility' ? p.cursor.visibility.map((x) => x.id) : p.cursor.keyframes.map((x) => x.id);
   s.select({ kind, ids });
 }
 
@@ -397,3 +406,31 @@ export function sourceAt(t: Flicks) {
 }
 
 export { errMsg };
+
+// ------------------------------------------------------------ highlights
+
+/** Circle the spot where a click happens, for the length of the click moment. */
+export function highlightClick(clickId: string) {
+  const s = editor();
+  const p = s.project;
+  const c = p.cursor.clicks.find((x) => x.id === clickId);
+  if (!c) return;
+  const aspect = (() => {
+    const a = p.media.find((m) => m.id === p.video.segments[0]?.assetId);
+    return a?.width && a?.height ? a.width / a.height : 16 / 9;
+  })();
+  const pos = evaluateCursorPosition(p.cursor.keyframes, c.time, aspect);
+  if (!pos) return;
+  const ry = 0.045;
+  const rx = ry / aspect;
+  const style = HIGHLIGHT_STYLES.find((x) => x.id === s.highlightStyle) ?? HIGHLIGHT_STYLES[0];
+  const h = createHighlight('ellipse', { x: pos.x - rx, y: pos.y - ry, w: rx * 2, h: ry * 2 }, Math.max(0, c.time - secondsToFlicks(0.4)), style);
+  h.end = c.time + secondsToFlicks(1.4);
+  s.commit((q) => ({ ...q, highlights: [...q.highlights, h] }), { select: { kind: 'highlight', ids: [h.id] } });
+}
+
+export function updateHighlights(ids: string[], patch: (h: Highlight) => Partial<Highlight>, gesture = false) {
+  const fn = (p: Project): Project => ({ ...p, highlights: p.highlights.map((h) => (ids.includes(h.id) ? { ...h, ...patch(h) } : h)) });
+  if (gesture) editor().preview(fn);
+  else editor().commit(fn);
+}

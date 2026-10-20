@@ -124,6 +124,15 @@ export interface CursorStyle {
   pressAnimation: boolean;
   /** Clip the cursor and click effects to the video's rounded rectangle. */
   clipToVideo: boolean;
+  /** Override the theme's outline with outlineColor / outlineWidth. */
+  customOutline: boolean;
+  outlineColor: string;
+  /** Outline thickness in cursor units (theme default ≈ 1.6–3.2; 0 = no outline). */
+  outlineWidth: number;
+  /** Fade the cursor out while it is not moving or clicking. */
+  autoHide: boolean;
+  /** Seconds the cursor stays visible after it stops moving/clicking. */
+  autoHideDelay: number;
 }
 
 export interface CursorTrack {
@@ -131,6 +140,42 @@ export interface CursorTrack {
   clicks: CursorClick[];
   visibility: CursorVisibilityEvent[];
   style: CursorStyle;
+}
+
+// ---------------------------------------------------------------- highlights
+
+export type HighlightShape = 'rect' | 'ellipse' | 'underline' | 'arrow' | 'spotlight';
+export type HighlightLine = 'solid' | 'dashed' | 'dotted' | 'marker' | 'sketch';
+export type HighlightIntro = 'draw' | 'fade' | 'pop' | 'none';
+
+/**
+ * An annotation drawn over the recording. Geometry is in SOURCE-normalized
+ * coordinates (like cursor keyframes), so it stays on the UI element when
+ * crop/layout/resolution change. For rect/ellipse/spotlight (x,y,w,h) is a box;
+ * for underline/arrow it is a line from (x,y) to (x+w, y+h) (arrow tip at the end).
+ */
+export interface Highlight {
+  id: string;
+  start: Flicks;
+  end: Flicks;
+  shape: HighlightShape;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  line: HighlightLine;
+  /** Stroke thickness in thousandths of the canvas height. */
+  thickness: number;
+  /** Translucent fill opacity (0 = no fill). Not used by underline/arrow. */
+  fill: number;
+  /** Soft outer glow in the highlight color. */
+  glow: boolean;
+  /** Rect/spotlight corner radius as a fraction of canvas height. */
+  cornerRadius: number;
+  /** Spotlight: opacity of the darkening outside the hole. */
+  dim: number;
+  intro: HighlightIntro;
 }
 
 // ---------------------------------------------------------------- audio
@@ -241,6 +286,7 @@ export interface Project {
     sourceAudioVolume: number;
   };
   cursor: CursorTrack;
+  highlights: Highlight[];
   audio: AudioClip[];
   background: Background;
   canvas: CanvasSettings;
@@ -261,6 +307,11 @@ export const DEFAULT_CURSOR_STYLE: CursorStyle = {
   clickColor: '#ffffff',
   pressAnimation: true,
   clipToVideo: true,
+  customOutline: false,
+  outlineColor: '#ffffff',
+  outlineWidth: 2.4,
+  autoHide: false,
+  autoHideDelay: 1.0,
 };
 
 export const DEFAULT_LAYOUT: VideoLayout = {
@@ -311,6 +362,7 @@ export function createEmptyProject(name = 'Untitled Project'): Project {
       visibility: [],
       style: { ...DEFAULT_CURSOR_STYLE },
     },
+    highlights: [],
     audio: [],
     background: { kind: 'preset', id: 'aurora-violet' },
     canvas: { aspectW: 16, aspectH: 9 },
@@ -369,6 +421,7 @@ export function migrateProject(raw: unknown): Project {
       visibility: Array.isArray(r.cursor?.visibility) ? r.cursor!.visibility : [],
       style: { ...DEFAULT_CURSOR_STYLE, ...(r.cursor?.style ?? {}) },
     },
+    highlights: Array.isArray(r.highlights) ? r.highlights : [],
     audio: Array.isArray(r.audio) ? r.audio : [],
     background: r.background ?? base.background,
     canvas: { ...base.canvas, ...(r.canvas ?? {}) },

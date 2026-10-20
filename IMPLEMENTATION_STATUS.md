@@ -10,10 +10,11 @@ Legend: ✅ implemented **and verified** (test or observed run) · 🟡 implemen
 |---|---|
 | `tsc` (renderer + node configs) | ✅ passes |
 | `npm run build:native` (Swift helpers, SwiftPM, CLT only) | ✅ builds; helpers ad-hoc signed |
-| Unit tests (`vitest`: cursor, geometry, timeline, audio) | ✅ 46/46 |
-| Integration (real native exports: 1440p H.264+AAC, 4K HEVC 60 fps) | ✅ 6/6 |
-| E2E on dev build (`tests/e2e/scenario.mjs`) | ✅ 20/20 |
-| E2E on **packaged `.app`** (no dev server) | ✅ 20/20 |
+| Unit tests (`vitest`: cursor, cursor style, highlights, geometry, timeline, audio) | ✅ 70/70 |
+| Integration (real native exports: 1440p H.264+AAC, 4K HEVC 60 fps, custom outline, idle hiding, highlights) | ✅ 9/9 |
+| E2E on dev build (`tests/e2e/scenario.mjs`) | ✅ 23/23 |
+| E2E on **packaged `.app`** (no dev server) | ✅ 23/23 |
+| Preview smoothness (`tests/e2e/perf.mjs`, real 3024×1964 recording, packaged app) | ✅ 0 % blank frames in playback/scrub/step, ~120 picture updates/s while scrubbing (avg seek 3 ms), no stall seeks, settles on the exact full-res frame |
 | `scripts/verify-package.mjs` (bundle contents, helpers run, `codesign --verify --deep --strict`) | ✅ |
 | Real screen recording via packaged app (`tests/e2e/record.mjs`) | ✅ 3024×1964 @ display Retina resolution, finalized + auto-imported, system cursor absent (self-test conclusive) |
 | Edit + export of a real recording (cursor, click, freeze → 1440p) | ✅ 2560×1440 H.264, 4.2 s = 2.7 s + 1.5 s freeze |
@@ -33,11 +34,13 @@ Legend: ✅ implemented **and verified** (test or observed run) · 🟡 implemen
 
 ## Capabilities
 
-**Synthetic cursor**: ✅ click-to-place keyframes (upsert per frame, drag while placing), drag points in preview, drag on timeline (multi-select, snapping), precise time/position fields, easing presets (smooth/gentle/quick/linear) + custom Bézier editor (overshoot-proof), auto/manual move duration with clamping warnings, optional curved path with drag handle (loop-free), show/hide events with fades, pauses, left/right/double clicks with ripple/pulse/press effects, 4 vector themes, size/opacity/shadow/halo, hotspot-exact placement, clip-to-video, outside-crop warnings, path overlay (editing only, never exported), independent of freezes.
+**Synthetic cursor**: ✅ click-to-place keyframes (upsert per frame, drag while placing), drag points in preview, drag on timeline (multi-select, snapping), precise time/position fields, easing presets (smooth/gentle/quick/linear) + custom Bézier editor (overshoot-proof), auto/manual move duration with clamping warnings, optional curved path with drag handle (loop-free), show/hide events with fades, pauses, left/right/double clicks with ripple/pulse/press effects, 4 vector themes, size/opacity/shadow/halo, custom outline color + thickness (any theme), hide when idle with adjustable delay (fades out after the cursor stops, back in before the next move or click; idle ranges shaded on the cursor lane), hotspot-exact placement, clip-to-video, outside-crop warnings, path overlay (editing only, never exported), independent of freezes.
+
+**Highlights**: ✅ Highlight mode (H): drag on the preview to add a box, circle, underline, arrow or spotlight at the playhead (a click places a default size); one-click styles (Outline, Neon, Soft fill, Dashed, Marker, Sketch) and colors from a bar under the toolbar; move/resize handles; Highlights timeline lane (move, trim, duplicate, delete); inspector for line style, thickness, fill, glow, corners, spotlight dim, Draw/Fade/Pop intro and timing; "Highlight this click" on click markers; sticks to the recording through crop/layout; ripples with freezes.
 
 **Timeline**: ✅ ruler (frame ticks at high zoom), playhead scrub, frame stepping, edit-point jumps, zoom (pinch, ⌘±, slider, fit), horizontal scroll, thumbnails, real waveforms, select / multi-select, move/reorder video segments, trim (clip and freeze), split, delete, duplicate, freeze insert/extend, audio move between tracks with collision avoidance, audio trim, snapping to playhead/edges/events, ripple toggles, undo/redo (single step per gesture), context menus, keyboard shortcuts. Freeze segments hatched; audio overhang highlighted with a one-click fix.
 
-**Preview**: ✅ exact composition via shared `composeFrame`, fit + 150/200/300 % zoom, crop mode with handles, drag-to-position with center snapping guides, freeze badge.
+**Preview**: ✅ exact composition via shared `composeFrame`; never blank (last decoded frame held during seeks); fast scrubbing through a cached short-GOP 1280 px proxy that settles on the full-resolution frame 140 ms after you stop; playback drift corrected by ±6 % rate nudging instead of seeks; fit + 150/200/300 % zoom, crop mode with handles, drag-to-position with center snapping guides, freeze badge.
 
 **Audio**: ✅ MP3/WAV/M4A/AAC/AIFF import (drag-and-drop or dialog), narration + music tracks, volume 0–200 %, mute, linear fades, optional recording audio; 48 kHz AAC export.
 
@@ -52,7 +55,7 @@ Legend: ✅ implemented **and verified** (test or observed run) · 🟡 implemen
 * Imported footage with a baked-in cursor cannot be cleaned (communicated in the UI; recording in-app is the supported path).
 * Ad-hoc signed builds: macOS ties Screen Recording permission to the code signature, so **each rebuild requires re-approving** the permission. A stable self-signed certificate could avoid this (not set up).
 * Click metadata capture (spec 4.9) is not implemented. Cursor keyframes are placed manually by design; no global input monitoring.
-* Preview playback uses `<video>` slaved to the audio clock (drift correction > 1.5 frames); scrubbing/paused frames are exact, while live playback can be up to ~1 frame off. Export is always exact.
+* Preview playback uses `<video>` slaved to the audio clock with smooth rate correction; paused frames are exact, live playback can be ~1 frame off while converging. While scrubbing, the image is the 1280 px proxy (sharp full-resolution frame follows on release). Export is always exact.
 * Crop and layout apply to all clips in the project (no per-clip crop yet).
 * QuickTime shows exported dark tones slightly lifted (Apple's BT.709 gamma); browsers/YouTube match the editor.
 * Intel Macs not targeted (arm64 build only).

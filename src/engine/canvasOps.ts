@@ -78,7 +78,43 @@ export function runOp(ctx: CanvasRenderingContext2D, op: DrawOp, w: number, h: n
     case 'cursor':
       drawCursor(ctx, op);
       break;
+    case 'poly':
+      drawPoly(ctx, op);
+      break;
   }
+}
+
+function polyPath(points: number[], closed: boolean, path = new Path2D()): Path2D {
+  if (points.length < 2) return path;
+  path.moveTo(points[0], points[1]);
+  for (let i = 2; i + 1 < points.length; i += 2) path.lineTo(points[i], points[i + 1]);
+  if (closed) path.closePath();
+  return path;
+}
+
+/** Generic polyline/polygon (highlights). Mirrors OpExecutor "poly" in Draw.swift. */
+function drawPoly(ctx: CanvasRenderingContext2D, op: Extract<DrawOp, { op: 'poly' }>) {
+  const path = polyPath(op.points, op.closed);
+  for (const h of op.holes ?? []) polyPath(h, true, path);
+  ctx.save();
+  if (op.glow) {
+    const m = ctx.getTransform();
+    ctx.shadowColor = rgbaToCss(op.glow.color);
+    ctx.shadowBlur = op.glow.blur * Math.hypot(m.a, m.b);
+  }
+  if (op.fill) {
+    ctx.fillStyle = rgbaToCss(op.fill);
+    ctx.fill(path, op.holes?.length ? 'evenodd' : 'nonzero');
+  }
+  if (op.stroke && (op.lineWidth ?? 1) > 0) {
+    ctx.strokeStyle = rgbaToCss(op.stroke);
+    ctx.lineWidth = op.lineWidth ?? 1;
+    ctx.lineCap = op.cap ?? 'butt';
+    ctx.lineJoin = op.join ?? 'miter';
+    ctx.setLineDash(op.dash ?? []);
+    ctx.stroke(path);
+  }
+  ctx.restore();
 }
 
 // Cursor is drawn as a group (layers composited, then shadow + alpha applied
@@ -105,9 +141,13 @@ function drawCursor(ctx: CanvasRenderingContext2D, op: Extract<DrawOp, { op: 'cu
   for (const l of theme.layers) {
     const p = path2d(l.d);
     if (l.stroke) {
-      c.strokeStyle = l.stroke;
-      c.lineWidth = l.lineWidth ?? 1;
-      c.stroke(p);
+      // Outline override from the cursor style (same rule as native Draw.swift).
+      const width = op.lineWidth ?? l.lineWidth ?? 1;
+      if (width > 0) {
+        c.strokeStyle = op.stroke ? rgbaToCss(op.stroke) : l.stroke;
+        c.lineWidth = width;
+        c.stroke(p);
+      }
     }
     if (l.fill) {
       c.fillStyle = l.fill;
@@ -135,7 +175,7 @@ export function roundRectPath(ctx: CanvasRenderingContext2D, r: { x: number; y: 
 }
 
 /** Video layer: shadow (rounded rect fill), then the cropped frame clipped to the rounded rect. */
-export function drawVideo(ctx: CanvasRenderingContext2D, v: VideoDraw, frame: CanvasImageSource | null, drawShadow = true) {
+export function drawVideo(ctx: CanvasRenderingContext2D, v: VideoDraw, frame: { image: CanvasImageSource; scaleX: number; scaleY: number } | null, drawShadow = true) {
   if (drawShadow && v.shadow && v.shadow.color[3] > 0) {
     // Draw only the shadow (as the native renderer does): the casting shape is
     // placed far off-canvas and the shadow is offset back into place.
@@ -158,7 +198,8 @@ export function drawVideo(ctx: CanvasRenderingContext2D, v: VideoDraw, frame: Ca
   if (frame) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(frame, v.src.x, v.src.y, v.src.w, v.src.h, v.dest.x, v.dest.y, v.dest.w, v.dest.h);
+    // Source rect is in source pixels; a proxy image is smaller by (scaleX, scaleY).
+    ctx.drawImage(frame.image, v.src.x * frame.scaleX, v.src.y * frame.scaleY, v.src.w * frame.scaleX, v.src.h * frame.scaleY, v.dest.x, v.dest.y, v.dest.w, v.dest.h);
   } else {
     ctx.fillStyle = '#1b1c20';
     ctx.fillRect(v.dest.x, v.dest.y, v.dest.w, v.dest.h);

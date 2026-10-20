@@ -76,8 +76,42 @@ try {
   await sleep(400);
   await app.screenshot(path.join(OUT, '1-cursor-mode.png'));
 
-  // ---------------------------------------------------------------- freeze
+  // ---------------------------------------------------------------- highlight via real drag (H mode)
   await app.key('Escape', 'Escape');
+  await app.evaluate(`${D}.player.seek(${D}.time.secondsToFlicks(2.0))`);
+  await sleep(150);
+  await app.key('h', 'KeyH');
+  const hlMode = await app.evaluate(`${D}.editor().mode`);
+  const toScreen = async (u, v) =>
+    app.evaluate(`(() => {
+      const cv = document.querySelector('.stage-canvas-wrap canvas'); const r = cv.getBoundingClientRect();
+      const p = ${D}.editor().project; const pl = ${D}.compose.placementFor(p, p.media.find(m => m.kind === 'video'), { width: cv.width, height: cv.height });
+      const c = ${D}.geometry.sourceToCanvas({ x: ${u}, y: ${v} }, pl);
+      return { x: r.left + c.x / cv.width * r.width, y: r.top + c.y / cv.height * r.height };
+    })()`);
+  // Drag a box around the fixture's "Save" button (x 1660..1840, y 150..204 of 1920×1200).
+  const p0 = await toScreen(1650 / 1920, 140 / 1200);
+  const p1 = await toScreen(1850 / 1920, 214 / 1200);
+  await app.mouse('mouseMoved', p0.x, p0.y);
+  await app.mouse('mousePressed', p0.x, p0.y);
+  for (let i = 1; i <= 8; i++) await app.mouse('mouseMoved', p0.x + ((p1.x - p0.x) * i) / 8, p0.y + ((p1.y - p0.y) * i) / 8, { buttons: 1 });
+  await app.mouse('mouseReleased', p1.x, p1.y);
+  await sleep(200);
+  const hls = await app.evaluate(`${D}.editor().project.highlights.map(h => ({ shape: h.shape, x: h.x, y: h.y, w: h.w, h: h.h, start: h.start / 705600000, end: h.end / 705600000 }))`);
+  const hb = hls[0];
+  const hlOk = hlMode === 'highlight' && hls.length === 1 && hb.shape === 'rect' && Math.abs(hb.x - 1650 / 1920) < 0.004 && Math.abs(hb.y - 140 / 1200) < 0.006 && Math.abs(hb.x + hb.w - 1850 / 1920) < 0.004 && Math.abs(hb.y + hb.h - 214 / 1200) < 0.006;
+  check('H + drag creates a highlight on the Save button', hlOk, JSON.stringify(hls.map((h) => ({ ...h, x: +h.x.toFixed(4), y: +h.y.toFixed(4), w: +h.w.toFixed(4), h: +h.h.toFixed(4) }))));
+  check('highlight is fully drawn at the playhead', Math.abs(hb.start - 1.55) < 0.01 && Math.abs(hb.end - 4.05) < 0.01);
+  // One-click restyle from the floating bar.
+  await app.evaluate(`[...document.querySelectorAll('.highlight-bar .style-chip')].find(b => b.textContent.includes('Neon')).click()`);
+  const restyled = await app.evaluate(`${D}.editor().project.highlights[0]`);
+  check('style chip restyles the selected highlight', restyled.glow === true && restyled.color === '#3ad1bd');
+  await sleep(300);
+  await app.screenshot(path.join(OUT, '1b-highlight.png'));
+  await app.key('Escape', 'Escape');
+  await app.key('Escape', 'Escape');
+
+  // ---------------------------------------------------------------- freeze
   await app.evaluate(`${D}.player.seek(${D}.time.secondsToFlicks(3.0))`);
   await app.evaluate(`${D}.actions.insertFreeze(4)`);
   const after = await app.evaluate(`(() => { const p = ${D}.editor().project; return { kinds: p.video.segments.map(s => s.kind), dur: p.video.segments.reduce((a, s) => a + (s.kind === 'clip' ? s.sourceOut - s.sourceIn : s.duration), 0) / 705600000, kf3: p.cursor.keyframes.map(k => k.time / 705600000).sort((a,b)=>a-b)[2], audioStart: p.audio[0].start / 705600000 }; })()`);

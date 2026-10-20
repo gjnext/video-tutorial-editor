@@ -162,3 +162,85 @@ describe.skipIf(!nativeAvailable)('native export (4K HEVC 60 fps)', () => {
     expect(Math.abs(pr.duration - 12)).toBeLessThan(0.05);
   });
 });
+
+describe.skipIf(!nativeAvailable)('native cursor style rendering', () => {
+  it('draws a custom outline color/width on the exported cursor', async () => {
+    const fx = await ensureFixtures();
+    const p = await buildProject(fx.video, fx.audio);
+    p.cursor.style = { ...p.cursor.style, theme: 'white', customOutline: true, outlineColor: '#ff0000', outlineWidth: 4, shadow: false };
+    const idx = 15; // 0.5 s: cursor resting at the first keyframe
+    const planPath = path.join(OUT, 'plan-outline.json');
+    writeFileSync(planPath, JSON.stringify(buildRenderPlan(p, path.join(OUT, 'unused.mp4'))));
+    const png = path.join(OUT, 'outline.png');
+    await runHelper('studio-render', ['render-frame', planPath, String(idx), png]);
+    const op = composeFrame(p, frameToFlicks(idx, p.export.fps), { width: 2560, height: 1440 }).overlay.find((o) => o.op === 'cursor')!;
+    if (op.op !== 'cursor') throw new Error('no cursor');
+    // Left edge of the arrow (path x = 0) at mid-height: inside the 4-unit outline, outside the fill.
+    const outlinePx = `${op.x - 1 * op.scale},${op.y + 8 * op.scale}`;
+    const fillPx = `${op.x + 3 * op.scale},${op.y + 9 * op.scale}`;
+    const { pixels } = await runHelper('studio-fixtures', ['pixels', png, `${outlinePx};${fillPx}`]);
+    const [outline, fill] = pixels;
+    expect(outline[0]).toBeGreaterThan(200);
+    expect(outline[1]).toBeLessThan(60);
+    expect(outline[2]).toBeLessThan(60);
+    expect(fill).toEqual([255, 255, 255]); // white theme fill unchanged
+  });
+
+  it('hides an idle cursor in the export when "hide when idle" is on', async () => {
+    const fx = await ensureFixtures();
+    const p = await buildProject(fx.video, fx.audio);
+    const off = await buildProject(fx.video, fx.audio);
+    p.cursor.style = { ...p.cursor.style, autoHide: true, autoHideDelay: 1 };
+    off.cursor.keyframes = [];
+    off.cursor.clicks = [];
+    const plan = buildRenderPlan(p, path.join(OUT, 'unused.mp4'));
+    // Before the first move (resting at keyframe 1 from 1.0 s) the cursor must be absent.
+    const restIdx = plan.frames.findIndex((f) => f.t >= S(1.2));
+    expect(plan.frames[restIdx].overlay.some((o) => o.op === 'cursor')).toBe(false);
+    const a = path.join(OUT, 'autohide-rest.png');
+    const b = path.join(OUT, 'autohide-none.png');
+    writeFileSync(path.join(OUT, 'plan-autohide.json'), JSON.stringify(plan));
+    writeFileSync(path.join(OUT, 'plan-nocursor2.json'), JSON.stringify(buildRenderPlan(off, path.join(OUT, 'unused.mp4'))));
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-autohide.json'), String(restIdx), a]);
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-nocursor2.json'), String(restIdx), b]);
+    const cmp = await runHelper('studio-fixtures', ['compare', a, b, '8']);
+    expect(cmp.count).toBe(0);
+  });
+});
+
+describe.skipIf(!nativeAvailable)('native highlight rendering', () => {
+  it('draws box outlines and spotlight dimming at the composed positions', async () => {
+    const fx = await ensureFixtures();
+    const { createHighlight, HIGHLIGHT_STYLES } = await import('../../shared/highlights');
+    const p = await buildProject(fx.video, fx.audio);
+    p.cursor.keyframes = [];
+    p.cursor.clicks = [];
+    const box = createHighlight('rect', { x: 0.55, y: 0.25, w: 0.2, h: 0.15 }, S(0), HIGHLIGHT_STYLES[0]);
+    box.color = '#ff0000';
+    box.thickness = 8;
+    box.cornerRadius = 0;
+    box.intro = 'none';
+    const spot = createHighlight('spotlight', { x: 0.1, y: 0.3, w: 0.15, h: 0.2 }, S(0));
+    spot.intro = 'none';
+    spot.dim = 0.6;
+    const base = { ...p, highlights: [] };
+    p.highlights = [box, spot];
+    const idx = 30;
+    const size = { width: 2560, height: 1440 };
+    writeFileSync(path.join(OUT, 'plan-hl.json'), JSON.stringify(buildRenderPlan(p, path.join(OUT, 'unused.mp4'))));
+    writeFileSync(path.join(OUT, 'plan-hl-base.json'), JSON.stringify(buildRenderPlan(base, path.join(OUT, 'unused.mp4'))));
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-hl.json'), String(idx), path.join(OUT, 'hl.png')]);
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-hl-base.json'), String(idx), path.join(OUT, 'hl-base.png')]);
+    const pl = placementFor(p, p.media[0], size);
+    const topMid = sourceToCanvas({ x: 0.65, y: 0.25 }, pl);
+    const inside = sourceToCanvas({ x: 0.175, y: 0.4 }, pl); // inside the spotlight hole
+    const outside = sourceToCanvas({ x: 0.45, y: 0.8 }, pl); // dimmed area
+    const spec = [topMid, inside, outside].map((q) => `${q.x.toFixed(0)},${q.y.toFixed(0)}`).join(';');
+    const hl = (await runHelper('studio-fixtures', ['pixels', path.join(OUT, 'hl.png'), spec])).pixels;
+    const ref = (await runHelper('studio-fixtures', ['pixels', path.join(OUT, 'hl-base.png'), spec])).pixels;
+    expect(hl[0][0]).toBeGreaterThan(220); // red outline on the box edge
+    expect(hl[0][1]).toBeLessThan(50);
+    expect(hl[1]).toEqual(ref[1]); // spotlight hole unchanged
+    for (let c = 0; c < 3; c++) expect(Math.abs(hl[2][c] - ref[2][c] * 0.4)).toBeLessThanOrEqual(3); // 60 % dim
+  });
+});

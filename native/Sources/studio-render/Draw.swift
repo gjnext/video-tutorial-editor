@@ -132,9 +132,46 @@ struct OpExecutor {
             ctx.restoreGState()
         case "cursor":
             drawCursor(op, in: ctx)
+        case "poly":
+            drawPoly(op, in: ctx)
         default:
             break
         }
+    }
+
+    /// Generic polyline/polygon (highlights). Mirrors drawPoly in src/engine/canvasOps.ts.
+    func drawPoly(_ op: DrawOp, in ctx: CGContext) {
+        guard let pts = op.points, pts.count >= 2 else { return }
+        func add(_ p: [Double], closed: Bool, to path: CGMutablePath) {
+            guard p.count >= 2 else { return }
+            path.move(to: CGPoint(x: p[0], y: p[1]))
+            var i = 2
+            while i + 1 < p.count { path.addLine(to: CGPoint(x: p[i], y: p[i + 1])); i += 2 }
+            if closed { path.closeSubpath() }
+        }
+        let path = CGMutablePath()
+        add(pts, closed: op.closed ?? false, to: path)
+        for h in op.holes ?? [] { add(h, closed: true, to: path) }
+        ctx.saveGState()
+        if let g = op.glow, let gc = cgColor(g.color) {
+            ctx.setShadow(offset: .zero, blur: CGFloat(g.blur), color: gc)
+        }
+        if let f = cgColor(op.fill) {
+            ctx.addPath(path)
+            ctx.setFillColor(f)
+            ctx.fillPath(using: (op.holes?.isEmpty == false) ? .evenOdd : .winding)
+        }
+        let width = op.lineWidth ?? 1
+        if let s = cgColor(op.stroke), width > 0 {
+            ctx.addPath(path)
+            ctx.setStrokeColor(s)
+            ctx.setLineWidth(CGFloat(width))
+            ctx.setLineCap(op.cap == "round" ? .round : .butt)
+            ctx.setLineJoin(op.join == "round" ? .round : .miter)
+            if let d = op.dash, !d.isEmpty { ctx.setLineDash(phase: 0, lengths: d.map { CGFloat($0) }) }
+            ctx.strokePath()
+        }
+        ctx.restoreGState()
     }
 
     mutating func drawCursor(_ op: DrawOp, in ctx: CGContext) {
@@ -154,10 +191,12 @@ struct OpExecutor {
         ctx.setLineCap(.round)
         for layer in theme.layers {
             let p = cursorPath(layer.d)
-            if let st = cgColor(layer.stroke) {
+            // Outline override from the cursor style (same rule as src/engine/canvasOps.ts).
+            let width = op.lineWidth ?? layer.lineWidth ?? 1
+            if layer.stroke != nil, width > 0, let st = cgColor(op.stroke ?? layer.stroke) {
                 ctx.addPath(p)
                 ctx.setStrokeColor(st)
-                ctx.setLineWidth(CGFloat(layer.lineWidth ?? 1))
+                ctx.setLineWidth(CGFloat(width))
                 ctx.strokePath()
             }
             if let f = cgColor(layer.fill) {
@@ -188,6 +227,14 @@ struct OpExecutor {
         case "circle":
             let r = (op.r ?? 0) + (op.lineWidth ?? 0) + 2
             return CGRect(x: (op.cx ?? 0) - r, y: (op.cy ?? 0) - r, width: 2 * r, height: 2 * r)
+        case "poly":
+            guard let p = op.points, p.count >= 2 else { return .null }
+            var minX = Double.infinity, minY = Double.infinity, maxX = -Double.infinity, maxY = -Double.infinity
+            for i in stride(from: 0, to: p.count - 1, by: 2) {
+                minX = min(minX, p[i]); maxX = max(maxX, p[i]); minY = min(minY, p[i + 1]); maxY = max(maxY, p[i + 1])
+            }
+            let m = (op.lineWidth ?? 1) + (op.glow?.blur ?? 0) * 2 + 4
+            return CGRect(x: minX - m, y: minY - m, width: maxX - minX + 2 * m, height: maxY - minY + 2 * m)
         case "cursor":
             let s = op.scale ?? 1
             // Cursor art spans ~0..13 x 0..20 units; add stroke and shadow margins.

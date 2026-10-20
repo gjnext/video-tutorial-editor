@@ -122,6 +122,7 @@ function useShortcuts() {
       const lower = k.toLowerCase();
       if (lower === 'k') return handled(), toggleCursorMode();
       if (lower === 'v') return handled(), s.set({ mode: 'select' });
+      if (lower === 'h') return handled(), s.set({ mode: s.mode === 'highlight' ? 'select' : 'highlight' });
       if (lower === 'r') return handled(), s.set({ mode: s.mode === 'crop' ? 'select' : 'crop' });
       if (lower === 'c') return handled(), addClick(e.shiftKey ? 'double' : 'left');
       if (lower === 'p') return handled(), s.set({ showPath: !s.showPath });

@@ -38,6 +38,10 @@ npm run test:e2e          # drives the real built app: import → cursor → fre
 ```
 
 ```bash
+npm run test:perf -- <video.mp4>   # preview smoothness benchmark (blank frames, scrub rate, playback stalls)
+```
+
+```bash
 npm run package           # builds everything and creates release/mac-arm64/Tutorial Studio.app, then verifies it
 ```
 
@@ -56,8 +60,9 @@ clicking its icon. No terminal or dev server is needed.
 3. **Crop**: press **R** and drag the handles to remove browser tabs and the address bar.
 4. **Style**: pick a backdrop (26 built-in designs, or a solid color, gradient, or image) and a layout preset. Fine-tune scale, padding, corners and shadow in the inspector.
 5. **Cursor**: press **K**. Move the playhead to when the cursor should *arrive*, then click the target in the preview. Repeat for each target; motion between targets is generated (Smooth by default). Press **C** where the recorded UI reacts to add a click (⌥-click does both at once). Step frames with ← → to find the exact frame where the UI changes. Drag keyframes in the preview or on the timeline; edit easing, duration and optional curve in the inspector. Use show/hide markers and *Pause* as needed.
-6. **Freeze**: when narration is longer than the footage, put the playhead on the frame to hold and press **F**. The video holds; the cursor and narration keep going. Later cursor events ripple with the freeze; audio does not (configurable in the timeline toolbar).
-7. **Export** (⌘E): choose 1440p or 4K, 30/60 fps, H.264 or HEVC. Progress reflects real frames rendered; *Show in Finder* when done.
+6. **Highlight**: press **H**, pick a shape (box, circle, underline, arrow, spotlight) and a style (outline, neon glow, soft fill, dashed, marker, hand-drawn), then drag over the element in the preview. It's fully drawn at the playhead, appears on the Highlights lane, and can be moved, resized and retimed. Right-click a click marker → *Highlight This Click* circles it automatically.
+7. **Freeze**: when narration is longer than the footage, put the playhead on the frame to hold and press **F**. The video holds; the cursor and narration keep going. Later cursor events ripple with the freeze; audio does not (configurable in the timeline toolbar).
+8. **Export** (⌘E): choose 1440p or 4K, 30/60 fps, H.264 or HEVC. Progress reflects real frames rendered; *Show in Finder* when done.
 
 Save with ⌘S. A project is a `.tvproj` package that Finder shows as one document. It contains `project.json` plus copies of its media, so it is self-contained and can be moved. Unsaved work is recovered automatically after a crash. Press `?` for all shortcuts.
 

@@ -9,6 +9,7 @@ const SHORTCUTS: [string, string][] = [
   ['Go to start / end', 'Home End'],
   ['Cursor mode (place cursor)', 'K'],
   ['Arrange mode', 'V'],
+  ['Highlight mode (drag to highlight)', 'H'],
   ['Crop mode', 'R'],
   ['Add click at playhead', 'C'],
   ['Show / hide cursor path', 'P'],
