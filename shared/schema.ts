@@ -144,14 +144,14 @@ export interface CursorTrack {
 
 // ---------------------------------------------------------------- highlights
 
-export type HighlightShape = 'rect' | 'ellipse' | 'underline' | 'arrow' | 'spotlight';
+export type HighlightShape = 'rect' | 'ellipse' | 'underline' | 'arrow' | 'spotlight' | 'spot-ellipse';
 export type HighlightLine = 'solid' | 'dashed' | 'dotted' | 'marker' | 'sketch';
 export type HighlightIntro = 'draw' | 'fade' | 'pop' | 'none';
 
 /**
  * An annotation drawn over the recording. Geometry is in SOURCE-normalized
  * coordinates (like cursor keyframes), so it stays on the UI element when
- * crop/layout/resolution change. For rect/ellipse/spotlight (x,y,w,h) is a box;
+ * crop/layout/resolution change. For rect/ellipse/spotlights (x,y,w,h) is a box;
  * for underline/arrow it is a line from (x,y) to (x+w, y+h) (arrow tip at the end).
  */
 export interface Highlight {

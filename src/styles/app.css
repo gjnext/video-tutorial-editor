@@ -1498,3 +1498,77 @@ html.hud-mode #root {
   border-radius: 50%;
   flex: none;
 }
+
+/* ------------------------------------------------------------ theater / full screen */
+.presentation {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 7, 9, 0.92);
+}
+.presentation.fullscreen {
+  background: #000;
+}
+.presentation-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.presentation-stage canvas {
+  display: block;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  border-radius: 4px;
+}
+.presentation.fullscreen .presentation-stage canvas {
+  border-radius: 0;
+  box-shadow: none;
+}
+.presentation-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: rgba(28, 29, 34, 0.92);
+  border: 1px solid var(--border-strong);
+}
+.presentation.fullscreen .presentation-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  width: min(720px, 80vw);
+}
+.presentation-progress {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #3a3c44;
+  cursor: pointer;
+  overflow: hidden;
+}
+.presentation-progress div {
+  height: 100%;
+  background: var(--accent);
+}
+.shortcut-groups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 28px;
+}
+.shortcut-group {
+  display: flex;
+  flex-direction: column;
+}
+.shortcut-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}

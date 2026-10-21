@@ -6,7 +6,7 @@
  * Geometry is edited in source-normalized coordinates, like cursor keyframes.
  */
 import { useRef } from 'react';
-import { Circle, Focus, MoveUpRight, Square, Underline } from 'lucide-react';
+import { Circle, CircleDot, Focus, MoveUpRight, Square, Underline } from 'lucide-react';
 import { applyStyle, createHighlight, HIGHLIGHT_COLORS, HIGHLIGHT_SHAPES, HIGHLIGHT_STYLES, INTRO_DURATION, isLineShape } from '../../shared/highlights';
 import { canvasToSource, sourceToCanvas, type Point, type Size, type VideoPlacement } from '../../shared/geometry';
 import type { Highlight, HighlightShape, Project } from '../../shared/schema';
@@ -21,6 +21,7 @@ const SHAPE_ICONS: Record<HighlightShape, React.ReactNode> = {
   underline: <Underline size={13} />,
   arrow: <MoveUpRight size={13} />,
   spotlight: <Focus size={13} />,
+  'spot-ellipse': <CircleDot size={13} />,
 };
 
 function selectedHighlights(): string[] {
@@ -35,12 +36,13 @@ export function HighlightBar() {
   const project = useEditor((s) => s.project);
   const sel = selection.kind === 'highlight' ? project.highlights.filter((h) => selection.ids.includes(h.id)) : [];
   const current = sel[0];
-  const activeShape = current?.shape ?? shape;
+  const activeShape = shape;
   const activeColor = current?.color ?? HIGHLIGHT_STYLES.find((s) => s.id === styleId)?.color;
 
   const pickShape = (s: HighlightShape) => {
+    // Picking a shape prepares the NEXT highlight (change an existing one's shape in the inspector).
     editor().set({ highlightShape: s, mode: 'highlight' });
-    if (sel.length) updateHighlights(selectedHighlights(), () => ({ shape: s }));
+    if (sel.length) editor().select({ kind: null, ids: [] });
   };
   const pickStyle = (id: string) => {
     editor().set({ highlightStyle: id });
@@ -139,7 +141,7 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
     return { x: c.x * k, y: c.y * k };
   };
   const src = (e: { clientX: number; clientY: number }) => canvasToSource(fromEvent(e), placement);
-  const drag = useRef<{ kind: DragKind; id: string; start: Point; base: Highlight | null; moved: boolean } | null>(null);
+  const drag = useRef<{ kind: DragKind; id: string; start: Point; base: Highlight | null; moved: boolean; hitId?: string } | null>(null);
   const selIds = selection.kind === 'highlight' ? selection.ids : [];
   const shown = project.highlights.filter((h) => (time >= h.start && time < h.end) || selIds.includes(h.id));
   const interactive = mode === 'highlight' || mode === 'select';
@@ -152,7 +154,8 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
     drag.current = { kind, id, start: src(e), base: h, moved: false };
   };
 
-  const onBackgroundDown = (e: React.PointerEvent) => {
+  /** Drag draws a new highlight — even on top of another one; a plain click on one selects it. */
+  const onBackgroundDown = (e: React.PointerEvent, hitId?: string) => {
     if (e.button !== 0 || mode !== 'highlight') return;
     const s = editor();
     const style = HIGHLIGHT_STYLES.find((x) => x.id === s.highlightStyle) ?? HIGHLIGHT_STYLES[0];
@@ -160,6 +163,7 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
     // Start a little before the playhead so the highlight is fully drawn on the current frame.
     const h0 = createHighlight(s.highlightShape, { x: p.x, y: p.y, w: 0, h: 0 }, Math.max(0, playhead.getState().time - INTRO_DURATION.draw), style);
     begin(e, 'create', h0, h0.id);
+    drag.current!.hitId = hitId;
     s.preview((q) => upsert(q, h0));
     s.select({ kind: 'highlight', ids: [h0.id] });
   };
@@ -201,6 +205,11 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
     const d = drag.current;
     drag.current = null;
     if (!d) return;
+    if (d.kind === 'create' && !d.moved && d.hitId) {
+      editor().cancelGesture();
+      editor().select({ kind: 'highlight', ids: [d.hitId] });
+      return;
+    }
     if (d.kind === 'create' && !d.moved && d.base) {
       // A plain click places a default-sized highlight centered on the point.
       const b = d.base;
@@ -227,7 +236,7 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
       width={display.w}
       height={display.h}
       style={{ pointerEvents: mode === 'highlight' ? 'auto' : 'none', cursor: mode === 'highlight' ? 'crosshair' : undefined }}
-      onPointerDown={onBackgroundDown}
+      onPointerDown={(e) => onBackgroundDown(e)}
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
@@ -242,9 +251,9 @@ export function HighlightLayer({ project, mode, placement, canvasSize, display, 
         return (
           <g key={h.id}>
             {line ? (
-              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={16} style={{ pointerEvents: hit, cursor: 'move' }} onPointerDown={(e) => begin(e, 'move', h, h.id)} />
+              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="transparent" strokeWidth={16} style={{ pointerEvents: hit, cursor: selected || mode !== 'highlight' ? 'move' : 'crosshair' }} onPointerDown={(e) => (mode === 'highlight' && !selected ? onBackgroundDown(e, h.id) : begin(e, 'move', h, h.id))} />
             ) : (
-              <rect x={box.x} y={box.y} width={Math.max(4, box.w)} height={Math.max(4, box.h)} fill="transparent" stroke="transparent" strokeWidth={10} style={{ pointerEvents: hit, cursor: 'move' }} onPointerDown={(e) => begin(e, 'move', h, h.id)} />
+              <rect x={box.x} y={box.y} width={Math.max(4, box.w)} height={Math.max(4, box.h)} fill="transparent" stroke="transparent" strokeWidth={10} style={{ pointerEvents: hit, cursor: selected || mode !== 'highlight' ? 'move' : 'crosshair' }} onPointerDown={(e) => (mode === 'highlight' && !selected ? onBackgroundDown(e, h.id) : begin(e, 'move', h, h.id))} />
             )}
             {selected && !line && (
               <>

@@ -5,9 +5,9 @@
  * undo step each. The playhead is updated imperatively (no React re-render).
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Magnet, MousePointerClick, Scissors, Snowflake, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
-import { clipDuration, clipEnd, resolveAudioMove, trimAudioClip } from '../../shared/audio';
-import { AUTO_HIDE_FADE, autoHideWindows, cursorWarnings, resolveMove, sortByTime, evaluateCursorPosition } from '../../shared/cursor';
+import { AlertTriangle, Eye, EyeOff, Magnet, MousePointerClick, Scissors, Timer, Snowflake, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
+import { clipDuration, clipEnd, resolveAudioMove, swapAudioClips, trimAudioClip } from '../../shared/audio';
+import { AUTO_HIDE_FADE, autoHideWindows, cursorWarnings, segmentMoves, sortByTime, evaluateTrackPosition } from '../../shared/cursor';
 import { applySegmentEdit, audioOverhang, moveSegment, placeSegments, projectDuration, snapPoints, trimSegment } from '../../shared/timeline';
 import { isInsideCrop } from '../../shared/geometry';
 import { assetMap, cursorSpaceAspect } from '../../shared/compose';
@@ -17,7 +17,7 @@ import { editor, useEditor, type Waveform } from '../state/store';
 import { playhead } from '../state/playhead';
 import { player } from '../engine/player';
 import { Button, NumberField, Slider, Toggle, useContextMenu, useTooltip } from '../components/ui';
-import { addClick, addVisibility, deleteSelection, duplicateSelection, extendToCoverAudio, highlightClick, insertFreeze, placeKeyframe, splitAtPlayhead } from '../state/actions';
+import { addClick, addPause, addVisibility, deleteSelection, duplicateSelection, extendToCoverAudio, highlightClick, insertFreeze, placeKeyframe, splitAtPlayhead } from '../state/actions';
 import { HIGHLIGHT_SHAPES, INTRO_DURATION } from '../../shared/highlights';
 
 const RULER_H = 26;
@@ -239,6 +239,15 @@ export function Timeline() {
         <Button size="small" tip="Add a cursor click at the playhead" shortcut="C" onClick={() => addClick('left')}>
           <MousePointerClick size={12} /> Click
         </Button>
+        <Button size="small" tip="Show the cursor from the playhead (starts a new cursor segment)" shortcut="[" onClick={() => addVisibility(true)}>
+          <Eye size={12} /> Show
+        </Button>
+        <Button size="small" tip="Hide the cursor from the playhead (ends the cursor segment)" shortcut="]" onClick={() => addVisibility(false)}>
+          <EyeOff size={12} /> Hide
+        </Button>
+        <Button size="small" tip="Hold the cursor still for 1 s at the playhead (later points move back by 1 s)" onClick={() => addPause(1)}>
+          <Timer size={12} /> Pause 1s
+        </Button>
         <Button size="small" variant="ghost" icon tip="Delete selection" shortcut="⌫" onClick={deleteSelection} disabled={!selection.ids.length}>
           <Trash2 size={13} />
         </Button>
@@ -448,36 +457,28 @@ function selectWith(kind: import('../state/store').SelectionKind, id: string, e:
 
 function VideoTrack({ project, pps, selection, gesture, onEmptyDown, menu, thumbnails }: TrackProps & { thumbnails: ReturnType<typeof useEditor.getState>['thumbnails'] }) {
   const placed = placeSegments(project.video.segments);
-  const [dragging, setDragging] = useState<{ id: string; dx: number } | null>(null);
+  const [dragging, setDragging] = useState<{ id: string; left: number } | null>(null);
   const assets = assetMap(project.media);
 
   const startMove = (e: React.PointerEvent, seg: VideoSegment) => {
     selectWith('segment', seg.id, e);
     const x0 = e.clientX;
+    const base = editor().project;
+    const pl0 = placeSegments(base.video.segments);
+    const me = pl0.find((x) => x.segment.id === seg.id)!;
+    const left0 = toPx(me.start, pps);
+    const half = toPx(me.end - me.start, pps) / 2;
     gesture(e, {
-      onMove: (_dt, ev) => setDragging({ id: seg.id, dx: ev.clientX - x0 }),
-      onEnd: (moved) => {
-        setDragging(null);
-        if (!moved) {
-          editor().cancelGesture();
-          return;
-        }
+      onMove: (_dt, ev) => {
+        // The dragged clip follows the pointer; the others re-flow live around it.
+        const dx = ev.clientX - x0;
+        setDragging({ id: seg.id, left: left0 + dx });
+        const center = left0 + half + dx;
+        const idx = pl0.filter((x) => x.segment.id !== seg.id && toPx(x.start, pps) + toPx(x.end - x.start, pps) / 2 < center).length;
+        editor().preview((p) => applySegmentEdit(p, moveSegment(p.video.segments, seg.id, idx)));
       },
+      onEnd: () => setDragging(null),
     });
-    // Reorder on release: compute target index from pointer position.
-    const up = (ev: PointerEvent) => {
-      window.removeEventListener('pointerup', up);
-      const dx = ev.clientX - x0;
-      if (Math.abs(dx) < 3) return;
-      const p = editor().project;
-      const pl = placeSegments(p.video.segments);
-      const me = pl.find((x) => x.segment.id === seg.id)!;
-      const center = toPx(me.start, pps) + toPx(me.end - me.start, pps) / 2 + dx;
-      let idx = pl.filter((x) => x.segment.id !== seg.id && toPx(x.start, pps) + toPx(x.end - x.start, pps) / 2 < center).length;
-      idx = Math.max(0, Math.min(pl.length - 1, idx));
-      if (idx !== me.index) editor().commit((q) => applySegmentEdit(q, moveSegment(q.video.segments, seg.id, idx)));
-    };
-    window.addEventListener('pointerup', up);
   };
 
   const startTrim = (e: React.PointerEvent, seg: VideoSegment, edge: 'start' | 'end') => {
@@ -522,7 +523,7 @@ function VideoTrack({ project, pps, selection, gesture, onEmptyDown, menu, thumb
           <div
             key={seg.id}
             className={`clip ${seg.kind === 'freeze' ? 'freeze' : 'video'} ${sel ? 'selected' : ''}`}
-            style={{ left, width, transform: isDrag ? `translateX(${dragging!.dx}px)` : undefined, zIndex: isDrag ? 5 : undefined, opacity: isDrag ? 0.85 : 1 }}
+            style={{ left: isDrag ? dragging!.left : left, width, zIndex: isDrag ? 5 : undefined, opacity: isDrag ? 0.85 : 1, boxShadow: isDrag ? '0 6px 18px rgba(0,0,0,0.5)' : undefined }}
             onPointerDown={(e) => startMove(e, seg)}
             onContextMenu={(e) => segMenu(e, seg)}
           >
@@ -603,14 +604,14 @@ function CursorTrack({ project, pps, selection, gesture, onEmptyDown, menu, time
   const onDouble = (e: React.MouseEvent) => {
     // Add a waypoint on the existing path at this time (keeps motion intact).
     const t = snapToFrame(timeFromClient(e.clientX), project.export.fps);
-    const pos = evaluateCursorPosition(project.cursor.keyframes, t, aspect);
+    const pos = evaluateTrackPosition(project.cursor, t, aspect);
     if (pos) placeKeyframe(pos.x, pos.y, t);
     else editor().toast('info', 'Switch to Cursor mode (K) and click the video to place the first cursor position.');
   };
   const onMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     const t = snapToFrame(timeFromClient(e.clientX), project.export.fps);
-    const pos = evaluateCursorPosition(project.cursor.keyframes, t, aspect);
+    const pos = evaluateTrackPosition(project.cursor, t, aspect);
     menu(e, [
       { label: 'Add Keyframe Here', disabled: !pos, run: () => pos && placeKeyframe(pos.x, pos.y, t) },
       { label: 'Show Cursor Here', run: () => addVisibility(true, t) },
@@ -652,15 +653,12 @@ function CursorTrack({ project, pps, selection, gesture, onEmptyDown, menu, time
       {hidden.map(([a, b], i) => (
         <div key={i} style={{ position: 'absolute', top: 3, bottom: 3, left: toPx(a, pps), width: Math.min(toPx(b - a, pps), 1e6), background: 'repeating-linear-gradient(90deg, rgba(0,0,0,0.25) 0 4px, transparent 4px 8px)', pointerEvents: 'none' }} title="Cursor hidden" />
       ))}
-      {kfs.slice(1).map((to, i) => {
-        const mv = resolveMove(kfs[i], to, aspect);
-        return (
-          <div key={to.id}>
-            <div className="hold-bar" style={{ left: toPx(kfs[i].time, pps), width: Math.max(0, toPx(mv.start - kfs[i].time, pps)) }} />
-            <div className="move-bar" style={{ left: toPx(mv.start, pps), width: Math.max(1, toPx(mv.end - mv.start, pps)) }} />
-          </div>
-        );
-      })}
+      {segmentMoves(project.cursor, aspect).map((mv) => (
+        <div key={mv.to.id}>
+          <div className="hold-bar" style={{ left: toPx(mv.from.time, pps), width: Math.max(0, toPx(mv.start - mv.from.time, pps)) }} />
+          <div className="move-bar" style={{ left: toPx(mv.start, pps), width: Math.max(1, toPx(mv.end - mv.start, pps)) }} />
+        </div>
+      ))}
       {kfs.map((k) => (
         <div
           key={k.id}
@@ -883,8 +881,18 @@ function AudioTrack({
         const snappedEnd = snap(s + clipDuration(clip)) - clipDuration(clip);
         s = Math.abs(snappedStart - s) <= Math.abs(snappedEnd - s) ? snappedStart : snappedEnd;
         s = snapToFrame(Math.max(0, s), base.export.fps);
-        const others = base.audio;
-        const resolved = resolveAudioMove(others, clip.id, s, tr);
+        // Dragging a clip past the middle of a neighbour on the same track swaps them.
+        const dur = clipDuration(clip);
+        const mid = s + dur / 2;
+        const neighbour = tr === clip.track ? base.audio.find((c) => c.track === tr && c.id !== clip.id && mid > c.start && mid < clipEnd(c)) : undefined;
+        if (neighbour) {
+          const swapped = swapAudioClips(base.audio, clip.id, neighbour.id);
+          if (swapped) {
+            editor().preview((p) => ({ ...p, audio: swapped }));
+            return;
+          }
+        }
+        const resolved = resolveAudioMove(base.audio, clip.id, s, tr);
         editor().preview((p) => ({ ...p, audio: p.audio.map((c) => (c.id === clip.id ? { ...c, start: resolved, track: tr } : c)) }));
       },
     });

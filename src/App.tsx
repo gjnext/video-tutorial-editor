@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, HelpCircle, Redo2, Undo2, Upload } from 'lucide-react';
+import { Download, Keyboard, Redo2, Undo2, Upload } from 'lucide-react';
 import { Preview } from './preview/Preview';
 import { Timeline } from './timeline/Timeline';
 import { Inspector } from './inspector/Inspector';
@@ -7,6 +7,7 @@ import { Sidebar } from './sidebar/Sidebar';
 import { ExportDialog } from './dialogs/ExportDialog';
 import { RecordDialog } from './dialogs/RecordDialog';
 import { HelpDialog } from './dialogs/HelpDialog';
+import { Presentation } from './preview/Presentation';
 import { Button, ContextMenuProvider, Toasts, TooltipLayer } from './components/ui';
 import { editor, useEditor } from './state/store';
 import { playhead } from './state/playhead';
@@ -18,6 +19,7 @@ import type { MenuCommand, RecoveryInfo } from '../shared/ipc';
 import {
   addAssets,
   addClick,
+  addVisibility,
   deleteSelection,
   duplicateSelection,
   importFiles,
@@ -113,6 +115,10 @@ function useShortcuts() {
       if (k === 'Home') return handled(), player.seek(0);
       if (k === 'End') return handled(), player.seek(projectDuration(s.project));
       if (k === 'Backspace' || k === 'Delete') return handled(), deleteSelection();
+      if (k === 'Escape' && s.presentation) return handled(), s.set({ presentation: null });
+      if (k === 'F' && e.shiftKey) return handled(), s.set({ presentation: 'fullscreen' });
+      if (k.toLowerCase() === 't' && !e.shiftKey) return handled(), s.set({ presentation: s.presentation === 'theater' ? null : 'theater' });
+      if (s.presentation && k !== ' ' && !k.startsWith('Arrow')) return;
       if (k === 'Escape') {
         handled();
         if (s.mode !== 'select') s.set({ mode: 'select' });
@@ -120,6 +126,8 @@ function useShortcuts() {
         return;
       }
       const lower = k.toLowerCase();
+      if (k === '[') return handled(), addVisibility(true);
+      if (k === ']') return handled(), addVisibility(false);
       if (lower === 'k') return handled(), toggleCursorMode();
       if (lower === 'v') return handled(), s.set({ mode: 'select' });
       if (lower === 'h') return handled(), s.set({ mode: s.mode === 'highlight' ? 'select' : 'highlight' });
@@ -139,6 +147,7 @@ function useShortcuts() {
 
 export function App() {
   const dialog = useEditor((s) => s.dialog);
+  const presentation = useEditor((s) => s.presentation);
   const dirty = useEditor((s) => s.dirty);
   const name = useEditor((s) => s.project.name);
   const path = useEditor((s) => s.projectPath);
@@ -216,8 +225,8 @@ export function App() {
             <b>{name}</b>
             {dirty ? ' — Edited' : path ? ' — Saved' : ''}
           </div>
-          <Button variant="ghost" icon tip="Keyboard shortcuts" shortcut="?" onClick={() => editor().set({ dialog: 'help' })}>
-            <HelpCircle size={14} />
+          <Button variant="ghost" tip="All keyboard shortcuts" shortcut="?" onClick={() => editor().set({ dialog: 'help' })}>
+            <Keyboard size={14} /> Shortcuts
           </Button>
           <Button variant="record" onClick={() => editor().set({ dialog: 'record' })} tip="Record a window, display or region without the mouse pointer" shortcut="⇧⌘R">
             <span className="dot" /> Record
@@ -237,6 +246,7 @@ export function App() {
         <Timeline />
         {dragOver && <div style={{ position: 'fixed', inset: 0, border: '2px dashed var(--accent)', background: 'rgba(115,128,255,0.06)', pointerEvents: 'none', zIndex: 60 }} />}
       </div>
+      {presentation && <Presentation key={presentation} mode={presentation} />}
       {dialog === 'export' && <ExportDialog />}
       {dialog === 'record' && <RecordDialog />}
       {dialog === 'help' && <HelpDialog />}

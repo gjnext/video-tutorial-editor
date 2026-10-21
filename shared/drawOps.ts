@@ -52,6 +52,8 @@ export type DrawOp =
       cap?: 'butt' | 'round';
       join?: 'miter' | 'round';
       glow?: ShadowOp;
+      /** Fill erases instead of painting (destination-out, strength = fill alpha). Used for spotlights. */
+      erase?: boolean;
     }
   /** Synthetic cursor: theme layers placed with hotspot at (x,y), `scale` canvas px per cursor unit. */
   | {

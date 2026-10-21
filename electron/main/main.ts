@@ -322,7 +322,9 @@ app.whenReady().then(() => {
       });
     });
   }
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  // Deny every web permission except HTML full screen (used by the full-screen preview).
+  session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === 'fullscreen'));
+  session.defaultSession.setPermissionCheckHandler((_wc, perm) => perm === 'fullscreen');
   allowDir(dirs.thumbnails());
   handleMediaProtocol();
   registerIpc();

@@ -50,14 +50,31 @@ describe('highlights', () => {
     }
   });
 
-  it('spotlight dims the video with an even-odd hole over the box', () => {
+  it('spotlight: one shared dim layer, then feathered erasures of the area', () => {
     const { p, pl, res } = setup({ shape: 'spotlight', thickness: 0, dim: 0.6 });
     const ops = polys(highlightOps(p.highlights, S(2), pl, res));
-    expect(ops).toHaveLength(SPOT_FEATHER_STEPS);
-    expect(ops.every((o) => o.holes?.length === 1)).toBe(true);
-    // Far from the element all feather layers overlap → exactly the requested dim.
-    const a = ops[0].fill![3];
-    expect(1 - Math.pow(1 - a, ops.length)).toBeCloseTo(0.6, 6);
+    expect(ops).toHaveLength(1 + SPOT_FEATHER_STEPS);
+    expect(ops[0].fill![3]).toBeCloseTo(0.6, 6);
+    expect(ops[0].erase).toBeFalsy();
+    const erases = ops.slice(1);
+    expect(erases.every((o) => o.erase)).toBe(true);
+    // Core erased fully; ring k erases 1/(k+1) → the dim reaches k/N in ring k.
+    expect(erases[0].fill![3]).toBe(1);
+    let remaining = 1;
+    for (let k = SPOT_FEATHER_STEPS - 1; k >= 1; k--) {
+      remaining *= 1 - erases[k].fill![3];
+      expect(remaining).toBeCloseTo(k / SPOT_FEATHER_STEPS, 9);
+    }
+  });
+
+  it('several spotlights share ONE dim layer (no double darkening, union of bright areas)', () => {
+    const { p, pl, res } = setup({ shape: 'spotlight', thickness: 0, dim: 0.5 });
+    p.highlights.push({ ...p.highlights[0], id: 'hl_two', shape: 'spot-ellipse', x: 0.3, y: 0.35, w: 0.2, h: 0.2, dim: 0.6 });
+    const ops = polys(highlightOps(p.highlights, S(2), pl, res));
+    const dims = ops.filter((o) => o.fill && !o.erase);
+    expect(dims).toHaveLength(1);
+    expect(dims[0].fill![3]).toBeCloseTo(0.6, 6); // strongest requested dim
+    expect(ops.filter((o) => o.erase)).toHaveLength(2 * SPOT_FEATHER_STEPS);
   });
 
   it('arrow tip lands exactly on the end point', () => {

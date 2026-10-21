@@ -111,6 +111,11 @@ overlay, warning in the inspector).
 * **Before the first / after the last keyframe** the cursor holds that position.
 * **Visibility**: show/hide events; the state before the first event is its
   opposite; 160 ms linear fade.
+* **Segments**: every show that follows a hidden state starts a new segment.
+  Keyframes interpolate only within their segment; before its first keyframe
+  the cursor holds there. So a reappearing cursor starts at the new segment's
+  first point and never travels across hidden time. No show/hide events → one
+  continuous segment. Clicks, idle-hide activity and warnings are per segment.
 * **Hide when idle** (`style.autoHide`, `autoHideDelay`): activity = each movement
   interval plus each click (`time − 60 ms` … last press `+ 520 ms`). The cursor is fully
   visible from 150 ms before an activity until `autoHideDelay` after it, with 250 ms linear
@@ -162,8 +167,12 @@ even-odd holes, dash, cap/join, glow), so renderers only stroke and fill points:
   marker = 2.6× width at 45 % alpha, sketch = deterministic low-frequency wobble seeded by the id
   (two passes, slight overshoot), resolution independent.
 * glow = halo stroke (3.4× width, 22 % alpha) beneath + shadow blur `max(6, 4w)` in the color.
-* spotlight = 6 stacked dim layers whose holes grow by up to `0.018 · H` (feathered edge),
-  per-layer alpha `1 − (1 − dim)^(1/6)`.
+* spotlights (box or circle) share ONE dim fill over the video (alpha = strongest active dim);
+  each spotlight then ERASES its area (destination-out): core fully, plus 5 rings growing to
+  `0.018 · H` with strength `1/(k+1)` so the dim rises to `k/6` in ring k. Erasures multiply,
+  so several spotlights merge into one bright area with no seam. Highlights are drawn into
+  their own transparent layer (preview offscreen canvas / native layer bitmap) before
+  compositing, so erasing never touches the video.
 * intro: draw = arc-length trim over 450 ms (ease-out cubic; arrow shaft 75 %, then head),
   fade 250 ms, pop = scale 0.85→1 + fade over 300 ms; outro: linear fade over the last 250 ms.
 

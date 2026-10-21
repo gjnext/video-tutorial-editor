@@ -6,7 +6,7 @@
 import { createEmptyProject, newId, type AudioTrackId, type ClickButton, type CursorKeyframe, type Highlight, type MediaAsset, type Project } from '../../shared/schema';
 import { appendClip, applySegmentEdit, deleteSegment, duplicateSegment, insertFreeze as insertFreezeEdit, mapProjectTime, placeSegments, projectDuration, splitAt } from '../../shared/timeline';
 import { clipEnd, createAudioClip, findFreeStart, splitAudioClip } from '../../shared/audio';
-import { evaluateCursorPosition, sortByTime } from '../../shared/cursor';
+import { evaluateTrackPosition, sortByTime } from '../../shared/cursor';
 import { createHighlight, HIGHLIGHT_STYLES } from '../../shared/highlights';
 import { frameDuration, flicksToFrame, frameToFlicks, secondsToFlicks, type Flicks } from '../../shared/time';
 import { editor } from './store';
@@ -419,7 +419,7 @@ export function highlightClick(clickId: string) {
     const a = p.media.find((m) => m.id === p.video.segments[0]?.assetId);
     return a?.width && a?.height ? a.width / a.height : 16 / 9;
   })();
-  const pos = evaluateCursorPosition(p.cursor.keyframes, c.time, aspect);
+  const pos = evaluateTrackPosition(p.cursor, c.time, aspect);
   if (!pos) return;
   const ry = 0.045;
   const rx = ry / aspect;

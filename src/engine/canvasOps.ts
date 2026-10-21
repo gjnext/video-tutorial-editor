@@ -104,7 +104,10 @@ function drawPoly(ctx: CanvasRenderingContext2D, op: Extract<DrawOp, { op: 'poly
   }
   if (op.fill) {
     ctx.fillStyle = rgbaToCss(op.fill);
+    // Erase = destination-out with the fill alpha as strength (spotlight union).
+    if (op.erase) ctx.globalCompositeOperation = 'destination-out';
     ctx.fill(path, op.holes?.length ? 'evenodd' : 'nonzero');
+    ctx.globalCompositeOperation = 'source-over';
   }
   if (op.stroke && (op.lineWidth ?? 1) > 0) {
     ctx.strokeStyle = rgbaToCss(op.stroke);
@@ -211,4 +214,26 @@ export function clipTo(ctx: CanvasRenderingContext2D, c: ClipRect | null) {
   if (!c) return;
   roundRectPath(ctx, c, c.radius);
   ctx.clip();
+}
+
+/**
+ * Highlights are rendered into their own transparent layer (like the native
+ * exporter's layer bitmap) so spotlight erasures only affect the highlight
+ * layer, then composited over the frame clipped to the video.
+ */
+let highlightLayer: HTMLCanvasElement | null = null;
+export function drawHighlightLayer(ctx: CanvasRenderingContext2D, ops: DrawOp[], clip: ClipRect | null, w: number, h: number) {
+  if (!highlightLayer) highlightLayer = document.createElement('canvas');
+  if (highlightLayer.width !== w || highlightLayer.height !== h) {
+    highlightLayer.width = w;
+    highlightLayer.height = h;
+  }
+  const lctx = highlightLayer.getContext('2d')!;
+  lctx.setTransform(1, 0, 0, 1, 0, 0);
+  lctx.clearRect(0, 0, w, h);
+  runOps(lctx, ops, w, h);
+  ctx.save();
+  clipTo(ctx, clip);
+  ctx.drawImage(highlightLayer, 0, 0);
+  ctx.restore();
 }

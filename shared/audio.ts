@@ -159,3 +159,22 @@ export function trimAudioClip(clips: AudioClip[], id: string, edge: 'start' | 'e
     return { ...c, sourceOut: c.sourceIn + (end - c.start) };
   });
 }
+
+/**
+ * Swap two clips on the same track, keeping the gap between them and the
+ * overall span: [A][gap][B] → [B][gap][A]. Returns null if the result would
+ * overlap another clip (then the caller falls back to a normal move).
+ */
+export function swapAudioClips(clips: AudioClip[], aId: string, bId: string): AudioClip[] | null {
+  const a = clips.find((c) => c.id === aId);
+  const b = clips.find((c) => c.id === bId);
+  if (!a || !b || a.track !== b.track) return null;
+  const [first, second] = a.start <= b.start ? [a, b] : [b, a];
+  const gap = Math.max(0, second.start - clipEnd(first));
+  const newSecondFirst = { ...second, start: first.start };
+  const newFirstSecond = { ...first, start: first.start + clipDuration(second) + gap };
+  const next = clips.map((c) => (c.id === second.id ? newSecondFirst : c.id === first.id ? newFirstSecond : c));
+  const lane = next.filter((c) => c.track === a.track).sort((x, y) => x.start - y.start);
+  for (let i = 1; i < lane.length; i++) if (lane[i].start < clipEnd(lane[i - 1])) return null;
+  return next;
+}

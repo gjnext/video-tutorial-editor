@@ -202,6 +202,85 @@ export function evaluateCursorPosition(
   return { x: last.x, y: last.y, moving: false, active: kf.length - 1 };
 }
 
+// ---------------------------------------------------------------- segments (show → hide loops)
+
+/**
+ * The cursor timeline is split into independent SEGMENTS at every moment the
+ * cursor becomes visible (a "show" event after it was hidden). Keyframes only
+ * interpolate within their own segment: when the cursor reappears it starts at
+ * the new segment's first keyframe and never travels across a hidden gap.
+ * Without show/hide events there is a single segment (continuous motion).
+ */
+export interface CursorSegment {
+  index: number;
+  /** Project time the segment starts (−Infinity for the first). */
+  start: Flicks;
+  /** Start of the next segment (Infinity for the last). */
+  end: Flicks;
+  keyframes: CursorKeyframe[];
+}
+
+/** Times at which visibility switches from hidden to visible (segment starts). */
+export function segmentStarts(track: Pick<CursorTrack, 'visibility'>): Flicks[] {
+  const ev = sortByTime(track.visibility);
+  if (!ev.length) return [];
+  let visible = !ev[0].visible;
+  const out: Flicks[] = [];
+  for (const e of ev) {
+    if (e.visible && !visible) out.push(e.time);
+    visible = e.visible;
+  }
+  return out;
+}
+
+function segmentIndex(starts: Flicks[], t: Flicks): number {
+  let i = 0;
+  while (i < starts.length && starts[i] <= t) i++;
+  return i;
+}
+
+export function cursorSegments(track: Pick<CursorTrack, 'visibility' | 'keyframes'>): CursorSegment[] {
+  const starts = segmentStarts(track);
+  const segs: CursorSegment[] = [{ index: 0, start: -Infinity, end: starts[0] ?? Infinity, keyframes: [] }];
+  starts.forEach((s, i) => segs.push({ index: i + 1, start: s, end: starts[i + 1] ?? Infinity, keyframes: [] }));
+  for (const k of sortByTime(track.keyframes)) segs[segmentIndex(starts, k.time)].keyframes.push(k);
+  return segs;
+}
+
+/** Keyframes of the segment containing time t. */
+export function segmentKeyframesAt(track: Pick<CursorTrack, 'visibility' | 'keyframes'>, t: Flicks): CursorKeyframe[] {
+  const starts = segmentStarts(track);
+  if (!starts.length) return sortByTime(track.keyframes);
+  const idx = segmentIndex(starts, t);
+  return sortByTime(track.keyframes).filter((k) => segmentIndex(starts, k.time) === idx);
+}
+
+/** True when show/hide events make the cursor hidden at t (fades ignored). */
+export function hiddenAt(track: Pick<CursorTrack, 'visibility'>, t: Flicks): boolean {
+  const ev = sortByTime(track.visibility);
+  if (!ev.length) return false;
+  let visible = !ev[0].visible;
+  for (const e of ev) {
+    if (e.time > t) break;
+    visible = e.visible;
+  }
+  return !visible;
+}
+
+/** Cursor position at t, respecting segments. */
+export function evaluateTrackPosition(track: CursorTrack, t: Flicks, sourceAspect: number) {
+  return evaluateCursorPosition(segmentKeyframesAt(track, t), t, sourceAspect);
+}
+
+/** All movements, never across segment boundaries. */
+export function segmentMoves(track: Pick<CursorTrack, 'visibility' | 'keyframes'>, sourceAspect: number): MoveSegment[] {
+  const out: MoveSegment[] = [];
+  for (const seg of cursorSegments(track)) {
+    for (let i = 1; i < seg.keyframes.length; i++) out.push(resolveMove(seg.keyframes[i - 1], seg.keyframes[i], sourceAspect));
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- auto-hide when idle
 
 /** Cursor appears this long before a move/click begins (fully visible at that moment). */
@@ -224,10 +303,8 @@ export interface ActivityWindow {
 export function autoHideWindows(track: CursorTrack, sourceAspect: number): ActivityWindow[] {
   const delay = Math.round(Math.max(0, track.style.autoHideDelay) * FLICKS_PER_SECOND);
   const raw: [Flicks, Flicks][] = [];
-  const kf = sortByTime(track.keyframes);
-  for (let i = 1; i < kf.length; i++) {
-    const mv = resolveMove(kf[i - 1], kf[i], sourceAspect);
-    if (mv.end > mv.start || kf[i].x !== kf[i - 1].x || kf[i].y !== kf[i - 1].y) raw.push([mv.start, mv.end]);
+  for (const mv of segmentMoves(track, sourceAspect)) {
+    if (mv.end > mv.start || mv.to.x !== mv.from.x || mv.to.y !== mv.from.y) raw.push([mv.start, mv.end]);
   }
   for (const c of track.clicks) {
     const last = c.button === 'double' ? c.time + DOUBLE_CLICK_GAP : c.time;
@@ -261,7 +338,7 @@ export function evaluateAutoHide(track: CursorTrack, t: Flicks, sourceAspect: nu
 }
 
 export function evaluateCursor(track: CursorTrack, t: Flicks, sourceAspect: number): CursorState | null {
-  const pos = evaluateCursorPosition(track.keyframes, t, sourceAspect);
+  const pos = evaluateTrackPosition(track, t, sourceAspect);
   if (!pos) return null;
   return {
     x: pos.x,
@@ -280,7 +357,8 @@ export function evaluateClickEffects(track: CursorTrack, t: Flicks, sourceAspect
   for (const c of sortByTime(track.clicks)) {
     for (const pt of pressTimes(c)) {
       if (t < pt || t >= pt + CLICK_EFFECT_DURATION) continue;
-      const pos = evaluateCursorPosition(track.keyframes, pt, sourceAspect)!;
+      const pos = evaluateTrackPosition(track, pt, sourceAspect);
+      if (!pos) continue;
       out.push({ click: c, progress: (t - pt) / CLICK_EFFECT_DURATION, x: pos.x, y: pos.y });
     }
   }
@@ -305,22 +383,25 @@ export function cursorWarnings(
   isVisible: (p: { x: number; y: number }) => boolean,
 ): CursorWarning[] {
   const w: CursorWarning[] = [];
-  const kf = sortByTime(track.keyframes);
-  for (let i = 0; i < kf.length; i++) {
-    const k = kf[i];
-    if (i > 0 && kf[i - 1].time === k.time) {
-      w.push({ kind: 'same-time', id: k.id, message: 'Two keyframes share the same time — the cursor will jump instantly.' });
-    } else if (i > 0) {
-      const mv = resolveMove(kf[i - 1], k, sourceAspect);
-      if (mv.clamped) {
-        w.push({ kind: 'duration-clamped', id: k.id, message: 'Move duration is longer than the time since the previous keyframe; it was shortened.' });
+  for (const seg of cursorSegments(track)) {
+    const kf = seg.keyframes;
+    for (let i = 0; i < kf.length; i++) {
+      const k = kf[i];
+      if (i > 0 && kf[i - 1].time === k.time) {
+        w.push({ kind: 'same-time', id: k.id, message: 'Two keyframes share the same time — the cursor will jump instantly.' });
+      } else if (i > 0) {
+        const mv = resolveMove(kf[i - 1], k, sourceAspect);
+        if (mv.clamped) {
+          w.push({ kind: 'duration-clamped', id: k.id, message: 'Move duration is longer than the time since the previous keyframe; it was shortened.' });
+        }
       }
+      if (!isVisible(k)) w.push({ kind: 'outside-crop', id: k.id, message: 'This position is outside the cropped area and will not be visible.' });
     }
-    if (!isVisible(k)) w.push({ kind: 'outside-crop', id: k.id, message: 'This position is outside the cropped area and will not be visible.' });
   }
   for (const c of track.clicks) {
-    if (kf.length && c.time < kf[0].time) {
-      w.push({ kind: 'click-before-first', id: c.id, message: 'Click happens before the first cursor keyframe.' });
+    const kf = segmentKeyframesAt(track, c.time);
+    if (!kf.length || c.time < kf[0].time) {
+      w.push({ kind: 'click-before-first', id: c.id, message: 'Click happens before the cursor is placed in this segment.' });
       continue;
     }
     const pos = evaluateCursorPosition(kf, c.time, sourceAspect);

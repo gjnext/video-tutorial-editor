@@ -244,3 +244,38 @@ describe.skipIf(!nativeAvailable)('native highlight rendering', () => {
     for (let c = 0; c < 3; c++) expect(Math.abs(hl[2][c] - ref[2][c] * 0.4)).toBeLessThanOrEqual(3); // 60 % dim
   });
 });
+
+describe.skipIf(!nativeAvailable)('native multiple spotlights', () => {
+  it('merges a box and a circle spotlight with no seam where they overlap', async () => {
+    const fx = await ensureFixtures();
+    const { createHighlight } = await import('../../shared/highlights');
+    const p = await buildProject(fx.video, fx.audio);
+    p.cursor.keyframes = [];
+    p.cursor.clicks = [];
+    const a = createHighlight('spotlight', { x: 0.2, y: 0.3, w: 0.25, h: 0.2 }, S(0));
+    const b = createHighlight('spot-ellipse', { x: 0.38, y: 0.32, w: 0.2, h: 0.3 }, S(0));
+    for (const h of [a, b]) {
+      h.intro = 'none';
+      h.dim = 0.6;
+    }
+    p.highlights = [a, b];
+    const base = { ...p, highlights: [] };
+    writeFileSync(path.join(OUT, 'plan-spots.json'), JSON.stringify(buildRenderPlan(p, path.join(OUT, 'unused.mp4'))));
+    writeFileSync(path.join(OUT, 'plan-spots-base.json'), JSON.stringify(buildRenderPlan(base, path.join(OUT, 'unused.mp4'))));
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-spots.json'), '30', path.join(OUT, 'spots.png')]);
+    await runHelper('studio-render', ['render-frame', path.join(OUT, 'plan-spots-base.json'), '30', path.join(OUT, 'spots-base.png')]);
+    const pl = placementFor(p, p.media[0], { width: 2560, height: 1440 });
+    const pts = [
+      { x: 0.3, y: 0.4 }, // only in the box
+      { x: 0.42, y: 0.42 }, // overlap
+      { x: 0.48, y: 0.55 }, // only in the circle
+      { x: 0.45, y: 0.4 }, // ON the box's right edge, inside the circle → must not show a seam
+      { x: 0.8, y: 0.85 }, // outside both → dimmed 60 %
+    ].map((q) => sourceToCanvas(q, pl));
+    const spec = pts.map((q) => `${q.x.toFixed(0)},${q.y.toFixed(0)}`).join(';');
+    const got = (await runHelper('studio-fixtures', ['pixels', path.join(OUT, 'spots.png'), spec])).pixels;
+    const ref = (await runHelper('studio-fixtures', ['pixels', path.join(OUT, 'spots-base.png'), spec])).pixels;
+    for (let i = 0; i < 4; i++) for (let c = 0; c < 3; c++) expect(Math.abs(got[i][c] - ref[i][c])).toBeLessThanOrEqual(2);
+    for (let c = 0; c < 3; c++) expect(Math.abs(got[4][c] - ref[4][c] * 0.4)).toBeLessThanOrEqual(3);
+  });
+});

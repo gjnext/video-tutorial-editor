@@ -84,6 +84,7 @@ struct DrawOp: Decodable {
     var cap: String?
     var join: String?
     var glow: ShadowOp?
+    var erase: Bool?
 }
 
 struct ClipRect: Decodable {

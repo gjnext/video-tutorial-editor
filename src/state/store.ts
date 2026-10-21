@@ -60,6 +60,8 @@ interface EditorState {
   waveforms: Record<string, Waveform>;
   toasts: Toast[];
   dialog: null | 'export' | 'record' | 'freeze' | 'help';
+  /** Large preview: theater (~80 % of the window) or full screen. */
+  presentation: null | 'theater' | 'fullscreen';
 
   commit(fn: (p: Project) => Project, opts?: { select?: Selection }): void;
   beginGesture(): void;
@@ -104,6 +106,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   waveforms: {},
   toasts: [],
   dialog: null,
+  presentation: null,
 
   commit(fn, opts) {
     const s = get();

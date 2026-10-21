@@ -47,7 +47,8 @@ export const HIGHLIGHT_SHAPES: { id: HighlightShape; label: string; hint: string
   { id: 'ellipse', label: 'Circle', hint: 'Drag a circle around an element' },
   { id: 'underline', label: 'Underline', hint: 'Drag along text to underline it' },
   { id: 'arrow', label: 'Arrow', hint: 'Drag from the tail to the tip' },
-  { id: 'spotlight', label: 'Spotlight', hint: 'Drag over the area to keep bright; the rest dims' },
+  { id: 'spotlight', label: 'Spotlight', hint: 'Drag over an area to keep it bright; the rest dims. Add several — they merge seamlessly' },
+  { id: 'spot-ellipse', label: 'Spot circle', hint: 'Round spotlight; combine with other spotlights' },
 ];
 
 const SHAPE_DEFAULTS: Record<HighlightShape, Partial<Highlight>> = {
@@ -56,7 +57,10 @@ const SHAPE_DEFAULTS: Record<HighlightShape, Partial<Highlight>> = {
   underline: { line: 'marker', thickness: 5 },
   arrow: { line: 'solid', thickness: 4.5, fill: 0 },
   spotlight: { line: 'solid', thickness: 0, fill: 0, glow: false },
+  'spot-ellipse': { line: 'solid', thickness: 0, fill: 0, glow: false },
 };
+
+export const isSpotlight = (s: HighlightShape) => s === 'spotlight' || s === 'spot-ellipse';
 
 export function createHighlight(shape: HighlightShape, box: { x: number; y: number; w: number; h: number }, start: Flicks, style: HighlightStyle = HIGHLIGHT_STYLES[0]): Highlight {
   return {
@@ -201,14 +205,68 @@ export function highlightPhase(h: Highlight, t: Flicks): HighlightPhase | null {
   return { intro, alpha: Math.max(0, Math.min(1, inAlpha * outro)) };
 }
 
-/** Draw ops for all highlights visible at t, in canvas pixels (drawn clipped to the video). */
+/**
+ * Draw ops for all highlights visible at t, in canvas pixels. They are drawn
+ * into ONE transparent layer (clipped to the video) and then composited, so
+ * spotlight areas can be erased from the shared dim: several spotlights of any
+ * shape merge into one bright area with no seam where they overlap.
+ */
 export function highlightOps(highlights: Highlight[], t: Flicks, placement: VideoPlacement, canvas: Size): DrawOp[] {
   const ops: DrawOp[] = [];
   const active = highlights.filter((h) => t >= h.start && t < h.end).sort((a, b) => a.start - b.start || (a.id < b.id ? -1 : 1));
-  // Spotlights first so outlines/arrows remain bright on top of the dimming.
-  for (const h of [...active.filter((x) => x.shape === 'spotlight'), ...active.filter((x) => x.shape !== 'spotlight')]) {
-    const ph = highlightPhase(h, t)!;
-    ops.push(...shapeOps(h, ph, placement, canvas));
+  const spots = active.filter((x) => isSpotlight(x.shape));
+  if (spots.length) {
+    const d = placement.dest;
+    const outer = flat([[d.x - 2, d.y - 2], [d.x + d.w + 2, d.y - 2], [d.x + d.w + 2, d.y + d.h + 2], [d.x - 2, d.y + d.h + 2]]);
+    const dim = Math.max(...spots.map((h) => Math.max(0, Math.min(0.95, h.dim * highlightPhase(h, t)!.alpha))));
+    ops.push({ op: 'poly', points: outer, closed: true, fill: [0, 0, 0, dim] });
+    for (const h of spots) ops.push(...spotlightErase(h, highlightPhase(h, t)!, placement, canvas));
+  }
+  // Outlines, arrows etc. on top of the dimming (spotlight outlines included).
+  for (const h of active) ops.push(...shapeOps(h, highlightPhase(h, t)!, placement, canvas));
+  return ops;
+}
+
+/** Box of a highlight in canvas px, with the pop-in scale applied about its center. */
+function canvasBox(h: Highlight, ph: HighlightPhase, placement: VideoPlacement) {
+  const c0 = sourceToCanvas({ x: h.x, y: h.y }, placement);
+  const c1 = sourceToCanvas({ x: h.x + h.w, y: h.y + h.h }, placement);
+  const pop = h.intro === 'pop' ? 0.85 + 0.15 * easeOutCubic(ph.intro) : 1;
+  let bx = Math.min(c0.x, c1.x);
+  let by = Math.min(c0.y, c1.y);
+  let bw = Math.abs(c1.x - c0.x);
+  let bh = Math.abs(c1.y - c0.y);
+  if (pop !== 1) {
+    const cx = bx + bw / 2;
+    const cy = by + bh / 2;
+    bw *= pop;
+    bh *= pop;
+    bx = cx - bw / 2;
+    by = cy - bh / 2;
+  }
+  return { bx, by, bw, bh };
+}
+
+function spotHole(h: Highlight, b: { bx: number; by: number; bw: number; bh: number }, radius: number, grow: number): Pt[] {
+  return h.shape === 'spot-ellipse'
+    ? ellipsePoints(b.bx + b.bw / 2, b.by + b.bh / 2, b.bw / 2 + grow, b.bh / 2 + grow)
+    : roundedRectPoints(b.bx - grow, b.by - grow, b.bw + 2 * grow, b.bh + 2 * grow, radius + grow);
+}
+
+/**
+ * Erase one spotlight from the shared dim with a feathered edge: the core is
+ * erased fully, then N−1 rings growing by up to SPOT_FEATHER·H with strength
+ * 1/(k+1), so the dim rises to k/N in ring k (erasures multiply, order-free).
+ */
+function spotlightErase(h: Highlight, ph: HighlightPhase, placement: VideoPlacement, canvas: Size): DrawOp[] {
+  const b = canvasBox(h, ph, placement);
+  const radius = h.cornerRadius * canvas.height;
+  const N = SPOT_FEATHER_STEPS;
+  const feather = SPOT_FEATHER * canvas.height;
+  const a = ph.alpha;
+  const ops: DrawOp[] = [{ op: 'poly', points: flat(spotHole(h, b, radius, 0)), closed: true, fill: [0, 0, 0, a], erase: true }];
+  for (let k = 1; k < N; k++) {
+    ops.push({ op: 'poly', points: flat(spotHole(h, b, radius, (feather * k) / (N - 1))), closed: true, fill: [0, 0, 0, a / (k + 1)], erase: true });
   }
   return ops;
 }
@@ -223,20 +281,7 @@ function shapeOps(h: Highlight, ph: HighlightPhase, placement: VideoPlacement, c
   const ops: DrawOp[] = [];
   const pop = h.intro === 'pop' ? 0.85 + 0.15 * easeOutCubic(ph.intro) : 1;
   const drawP = h.intro === 'draw' ? easeOutCubic(ph.intro) : 1;
-
-  // Box in canvas px (normalized so w,h ≥ 0), with the pop scale about its center.
-  let bx = Math.min(c0.x, c1.x);
-  let by = Math.min(c0.y, c1.y);
-  let bw = Math.abs(c1.x - c0.x);
-  let bh = Math.abs(c1.y - c0.y);
-  if (pop !== 1) {
-    const cx = bx + bw / 2;
-    const cy = by + bh / 2;
-    bw *= pop;
-    bh *= pop;
-    bx = cx - bw / 2;
-    by = cy - bh / 2;
-  }
+  const { bx, by, bw, bh } = canvasBox(h, ph, placement);
   const radius = h.cornerRadius * H;
 
   /** Soft light around the line: a wide translucent halo stroke (plus a blurred glow). */
@@ -256,22 +301,12 @@ function shapeOps(h: Highlight, ph: HighlightPhase, placement: VideoPlacement, c
     } as const;
   };
 
-  if (h.shape === 'spotlight') {
-    const hole = roundedRectPoints(bx, by, bw, bh, radius);
-    const d = placement.dest;
-    // Cover the whole video; even-odd holes keep the element bright. The edge is
-    // feathered by stacking N layers whose holes grow outward, each with alpha a
-    // so that 1 − (1 − a)^N = dim far from the element.
-    const outer = flat([[d.x - 2, d.y - 2], [d.x + d.w + 2, d.y - 2], [d.x + d.w + 2, d.y + d.h + 2], [d.x - 2, d.y + d.h + 2]]);
-    const dim = Math.max(0, Math.min(0.95, h.dim * ph.alpha));
-    const N = SPOT_FEATHER_STEPS;
-    const feather = SPOT_FEATHER * H;
-    const a = 1 - Math.pow(1 - dim, 1 / N);
-    for (let i = 0; i < N; i++) {
-      const g = (feather * i) / (N - 1);
-      ops.push({ op: 'poly', points: outer, closed: true, holes: [flat(roundedRectPoints(bx - g, by - g, bw + 2 * g, bh + 2 * g, radius + g))], fill: [0, 0, 0, a] });
+  if (isSpotlight(h.shape)) {
+    // The dimming itself is produced by highlightOps; here only the optional outline.
+    if (lw > 0) {
+      const hole = spotHole(h, { bx, by, bw, bh }, radius, 0);
+      ops.push({ op: 'poly', points: flat(trimPolyline(hole, drawP)), closed: drawP >= 1, ...strokeProps() });
     }
-    if (lw > 0) ops.push({ op: 'poly', points: flat(trimPolyline(hole, drawP)), closed: drawP >= 1, ...strokeProps() });
     return ops;
   }
 

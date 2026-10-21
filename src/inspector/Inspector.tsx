@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { Crop, Film, MousePointer2, Monitor, Volume2, VolumeX } from 'lucide-react';
-import { cursorWarnings, resolveMove, sortByTime, suggestedMoveDuration, cursorDistance } from '../../shared/cursor';
+import { cursorWarnings, resolveMove, segmentKeyframesAt, segmentStarts, sortByTime, suggestedMoveDuration, cursorDistance } from '../../shared/cursor';
 import { bezierFor, cubicBezier, EASINGS, sanitizeBezier } from '../../shared/easing';
 import { isInsideCrop } from '../../shared/geometry';
 import { cursorSpaceAspect } from '../../shared/compose';
@@ -9,12 +9,11 @@ import { trimAudioClip, clipEnd } from '../../shared/audio';
 import { CURSOR_THEME_LIST, CURSOR_THEMES } from '../../shared/cursorThemes';
 import { flicksToSeconds, secondsToFlicks, snapToFrame, formatTimecode, type Flicks } from '../../shared/time';
 import type { BezierControls, CursorKeyframe, CursorStyle, EasingPreset, Highlight, HighlightLine, HighlightShape, Project, VideoLayout } from '../../shared/schema';
-import { applyStyle, HIGHLIGHT_COLORS, HIGHLIGHT_SHAPES, HIGHLIGHT_STYLES, INTRO_DURATION, isLineShape } from '../../shared/highlights';
+import { applyStyle, HIGHLIGHT_COLORS, HIGHLIGHT_SHAPES, HIGHLIGHT_STYLES, INTRO_DURATION, isLineShape, isSpotlight } from '../../shared/highlights';
 import { editor, useEditor } from '../state/store';
-import { usePlayheadTime } from '../state/playhead';
 import { player } from '../engine/player';
 import { Button, ColorInput, Field, NumberField, Section, Segmented, SliderField, Toggle, Warning } from '../components/ui';
-import { addPause, addVisibility, updateHighlights } from '../state/actions';
+import { updateHighlights } from '../state/actions';
 import { runOp } from '../engine/canvasOps';
 
 const g = () => editor();
@@ -120,7 +119,11 @@ function updateKfs(ids: string[], patch: (k: CursorKeyframe) => Partial<CursorKe
 }
 
 function KeyframeInspector({ project, ids }: { project: Project; ids: string[] }) {
-  const sorted = sortByTime(project.cursor.keyframes);
+  const kf0 = project.cursor.keyframes.find((k) => k.id === ids[0]);
+  // Numbering and the previous point are within the keyframe's show→hide segment.
+  const sorted = kf0 ? segmentKeyframesAt(project.cursor, kf0.time) : sortByTime(project.cursor.keyframes);
+  const segNo = kf0 ? segmentStarts(project.cursor).filter((s) => s <= kf0.time).length + 1 : 1;
+  const segCount = segmentStarts(project.cursor).length + 1;
   const kf = sorted.find((k) => k.id === ids[0]);
   const aspect = cursorSpaceAspect(project);
   const src = project.media.find((m) => m.id === project.video.segments[0]?.assetId);
@@ -137,7 +140,7 @@ function KeyframeInspector({ project, ids }: { project: Project; ids: string[] }
   return (
     <>
       {!multi && (
-        <Section title={`Keyframe ${idx + 1} of ${sorted.length}`} right={<Button size="small" variant="ghost" onClick={() => player.seek(kf.time)}>Go to</Button>}>
+        <Section title={segCount > 1 ? `Point ${idx + 1} of ${sorted.length} · segment ${segNo}` : `Keyframe ${idx + 1} of ${sorted.length}`} right={<Button size="small" variant="ghost" onClick={() => player.seek(kf.time)}>Go to</Button>}>
           <Field label="Arrives at">
             <TimeField value={kf.time} onChange={(t) => g().preview((p) => ({ ...p, cursor: { ...p.cursor, keyframes: p.cursor.keyframes.map((k) => (k.id === kf.id ? { ...k, time: t } : k)) } }))} />
           </Field>
@@ -151,7 +154,7 @@ function KeyframeInspector({ project, ids }: { project: Project; ids: string[] }
       )}
       <Section title={multi ? 'Movement (all selected)' : prev ? `Movement from keyframe ${idx}` : 'Movement'}>
         {!prev && !multi ? (
-          <div className="hint">This is where the cursor starts. Add another keyframe later in time and the motion is generated automatically.</div>
+          <div className="hint">This is where the cursor starts{segCount > 1 ? ' in this segment' : ''}. Add another keyframe later in time and the motion is generated automatically.</div>
         ) : (
           <>
             <Field label="Easing">
@@ -511,7 +514,6 @@ export function CursorStyleInspector({ project, only }: { project: Project; only
     if (gesture) g().preview(fn);
     else g().commit(fn);
   };
-  const t = usePlayheadTime(200);
   const effects = (
     <Section title="Click effect">
       <Field label="Effect">
@@ -586,14 +588,6 @@ export function CursorStyleInspector({ project, only }: { project: Project; only
         </div>
       </Section>
       {effects}
-      <Section title="Quick actions">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          <Button size="small" onClick={() => addVisibility(true)}>Show here</Button>
-          <Button size="small" onClick={() => addVisibility(false)}>Hide here</Button>
-          <Button size="small" onClick={() => addPause(1)}>Pause 1s here</Button>
-        </div>
-        <div className="hint">At {sec(t).toFixed(2)}s. Keyframes: {project.cursor.keyframes.length} · clicks: {project.cursor.clicks.length}</div>
-      </Section>
     </>
   );
 }
@@ -755,7 +749,7 @@ function HighlightInspector({ project, ids }: { project: Project; ids: string[] 
           ))}
           <ColorInput value={h.color} onChange={(v) => set({ color: v })} />
         </Field>
-        {h.shape !== 'spotlight' || h.thickness > 0 ? (
+        {!isSpotlight(h.shape) || h.thickness > 0 ? (
           <Field label="Line">
             <select className="select" value={h.line} onChange={(e) => set({ line: e.target.value as HighlightLine })}>
               <option value="solid">Solid</option>
@@ -766,9 +760,9 @@ function HighlightInspector({ project, ids }: { project: Project; ids: string[] 
             </select>
           </Field>
         ) : null}
-        <SliderField label={h.shape === 'spotlight' ? 'Outline' : 'Thickness'} value={h.thickness} min={0} max={14} step={0.25} precision={1} unit="" onChange={(v) => set({ thickness: v }, true)} />
-        {!line && h.shape !== 'spotlight' && <SliderField label="Fill" value={h.fill} min={0} max={0.6} step={0.01} scale={100} unit="%" onChange={(v) => set({ fill: v }, true)} />}
-        {h.shape === 'spotlight' && <SliderField label="Dim others" value={h.dim} min={0.1} max={0.9} step={0.01} scale={100} unit="%" onChange={(v) => set({ dim: v }, true)} />}
+        <SliderField label={isSpotlight(h.shape) ? 'Outline' : 'Thickness'} value={h.thickness} min={0} max={14} step={0.25} precision={1} unit="" onChange={(v) => set({ thickness: v }, true)} />
+        {!line && !isSpotlight(h.shape) && <SliderField label="Fill" value={h.fill} min={0} max={0.6} step={0.01} scale={100} unit="%" onChange={(v) => set({ fill: v }, true)} />}
+        {isSpotlight(h.shape) && <SliderField label="Dim others" value={h.dim} min={0.1} max={0.9} step={0.01} scale={100} unit="%" onChange={(v) => set({ dim: v }, true)} />}
         {(h.shape === 'rect' || h.shape === 'spotlight') && (
           <SliderField label="Corners" value={h.cornerRadius} min={0} max={0.04} step={0.001} scale={1000} onChange={(v) => set({ cornerRadius: v }, true)} />
         )}

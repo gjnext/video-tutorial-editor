@@ -4,22 +4,20 @@
  * in device pixels, then layers an SVG editing overlay on top.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crop as CropIcon, Highlighter, Maximize, MousePointer2, Move, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
-import { backgroundOps } from '../../shared/backgrounds';
-import { assetMap, composeFrame, cursorSpaceAspect, placementFor } from '../../shared/compose';
+import { Crop as CropIcon, Expand, HelpCircle, Highlighter, Maximize, Tv, MousePointer2, Move, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from 'lucide-react';
+import { assetMap, cursorSpaceAspect, placementFor } from '../../shared/compose';
 import { canvasToSource, fitRect, isInsideCrop, sourceToCanvas, type Point, type Rect, type Size } from '../../shared/geometry';
-import { curveControl, pathPoint, sortByTime } from '../../shared/cursor';
+import { curveControl, hiddenAt, pathPoint, segmentKeyframesAt } from '../../shared/cursor';
 import { mapProjectTime, projectDuration } from '../../shared/timeline';
 import { formatTimecode, type Flicks } from '../../shared/time';
 import { newId, type CursorKeyframe, type Project } from '../../shared/schema';
 import { useEditor, editor } from '../state/store';
 import { playhead, usePlayheadTime, usePlaying } from '../state/playhead';
 import { player } from '../engine/player';
-import { clipTo, drawVideo, runOps } from '../engine/canvasOps';
-import { imageFor } from '../engine/mediaCache';
 import { Button, Segmented } from '../components/ui';
 import { stepFrames, seekToEdge, fps } from '../state/actions';
 import { Welcome } from './Welcome';
+import { CompositionRenderer } from './compositionRenderer';
 import { perf } from '../engine/perf';
 import { HighlightBar, HighlightLayer } from './HighlightLayer';
 
@@ -58,7 +56,7 @@ export function Preview() {
 
   // ------------------------------------------------------------ drawing
 
-  const bgCache = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
+  const renderer = useRef<CompositionRenderer | null>(null);
   const draw = useCallback(() => {
     const cv = canvasRef.current;
     if (!cv) return;
@@ -81,7 +79,6 @@ export function Preview() {
       cv.height = canvasSize.height;
     }
     const ctx = cv.getContext('2d', { alpha: false })!;
-    const assets = assetMap(p.media);
     const W = canvasSize.width;
     const H = canvasSize.height;
     const t = playhead.getState().time;
@@ -90,39 +87,8 @@ export function Preview() {
       drawCropMode(ctx, p, t, W, H);
       return;
     }
-    // Background (static) — cached offscreen.
-    const bgAsset = p.background.kind === 'image' ? assets.get(p.background.assetId) : undefined;
-    const bgImg = bgAsset ? imageFor(bgAsset, () => requestDraw()) : null;
-    const key = `${JSON.stringify(p.background)}|${W}x${H}|${bgImg ? 1 : 0}`;
-    if (!bgCache.current || bgCache.current.key !== key) {
-      const off = document.createElement('canvas');
-      off.width = W;
-      off.height = H;
-      const octx = off.getContext('2d')!;
-      octx.fillStyle = '#000';
-      octx.fillRect(0, 0, W, H);
-      runOps(octx, backgroundOps(p.background, { width: W, height: H }, p.media), W, H, () => bgImg);
-      bgCache.current = { key, canvas: off };
-    }
-    ctx.drawImage(bgCache.current.canvas, 0, 0);
-    const f = composeFrame(p, t, { width: W, height: H }, assets);
-    if (f.video) {
-      const frame = player.frameFor(f.video.assetId);
-      if (!frame) perf.blankDraws++;
-      drawVideo(ctx, f.video, frame);
-    }
-    if (f.highlights.length) {
-      ctx.save();
-      clipTo(ctx, f.highlightClip);
-      runOps(ctx, f.highlights, W, H);
-      ctx.restore();
-    }
-    if (f.overlay.length) {
-      ctx.save();
-      clipTo(ctx, f.overlayClip);
-      runOps(ctx, f.overlay, W, H);
-      ctx.restore();
-    }
+    if (!renderer.current) renderer.current = new CompositionRenderer(() => requestDraw());
+    if (!renderer.current.draw(ctx, W, H, p, t)) perf.blankDraws++;
   };
 
   const rafRef = useRef(0);
@@ -169,6 +135,12 @@ export function Preview() {
           ]}
         />
         <div style={{ flex: 1 }} />
+        <Button size="small" variant="ghost" tip="Bigger preview (≈80 % of the window)" shortcut="T" onClick={() => editor().set({ presentation: 'theater' })} disabled={!hasVideo}>
+          <Tv size={13} /> Theater
+        </Button>
+        <Button size="small" variant="ghost" tip="Play full screen — closes automatically at the end" shortcut="⇧F" onClick={() => editor().set({ presentation: 'fullscreen' })} disabled={!hasVideo}>
+          <Expand size={13} /> Full screen
+        </Button>
         <Button size="small" variant="ghost" active={showPath} tip="Show the cursor path overlay (editing only — never exported)" shortcut="P" onClick={() => editor().set({ showPath: !showPath })}>
           Path
         </Button>
@@ -229,7 +201,11 @@ export function Preview() {
         )}
         {hasVideo && mode === 'cursor' && (
           <div className="mode-hint">
-            Click the video to place the cursor at <b>{formatTimecode(t, project.export.fps)}</b> · drag points to adjust · <span className="kbd">⌥</span>-click also adds a click
+            {hiddenAt(project.cursor, t) ? (
+              <>Cursor is hidden here — clicking the video <b>starts a new cursor segment</b> at {formatTimecode(t, project.export.fps)}</>
+            ) : (
+              <>Click the video to place the cursor at <b>{formatTimecode(t, project.export.fps)}</b> · drag points to adjust · <span className="kbd">⌥</span>-click also adds a click</>
+            )}
           </div>
         )}
         {hasVideo && mode === 'crop' && <div className="mode-hint">Drag the edges to remove browser tabs, toolbars or margins · <b>Esc</b> when done</div>}
@@ -279,7 +255,10 @@ interface OverlayProps {
 
 function Overlay(props: OverlayProps) {
   const { project, mode, showPath, selection, placement, display, toCss, fromEvent, sourceAspect, canvasSize } = props;
-  const kfs = sortByTime(project.cursor.keyframes);
+  // Only the cursor segment at the playhead (or of the selected keyframe) is drawn,
+  // so earlier/later show→hide loops don't clutter the screen.
+  const selKf = selection.kind === 'keyframe' ? project.cursor.keyframes.find((k) => k.id === selection.ids[0]) : undefined;
+  const kfs = segmentKeyframesAt(project.cursor, selKf ? selKf.time : props.time);
   const dest = placement.dest;
   const destCss = { ...toCss({ x: dest.x, y: dest.y }), w: dest.w * (display.w / canvasSize.width), h: dest.h * (display.w / canvasSize.width) };
   const drag = useRef<null | { kind: string; id?: string; start: Point; base: Project; moved: boolean }>(null);
@@ -340,7 +319,7 @@ function Overlay(props: OverlayProps) {
       editor().preview((p) => ({ ...p, cursor: { ...p.cursor, keyframes: p.cursor.keyframes.map((k) => (k.id === d.id ? { ...k, x: sp.x, y: sp.y } : k)) } }));
     } else if (d.kind === 'curve') {
       const kf = d.base.cursor.keyframes.find((k) => k.id === d.id)!;
-      const prev = sortByTime(d.base.cursor.keyframes).filter((k) => k.time < kf.time || (k.time === kf.time && k.id < kf.id)).pop();
+      const prev = segmentKeyframesAt(d.base.cursor, kf.time).filter((k) => k.time < kf.time || (k.time === kf.time && k.id < kf.id)).pop();
       if (!prev) return;
       const sp = canvasToSource(pt, placement);
       // Signed perpendicular offset (aspect-corrected) relative to segment length.
@@ -458,14 +437,16 @@ function Overlay(props: OverlayProps) {
 function upsertKeyframe(p: Project, id: string, t: Flicks, pt: Point, addClickToo: boolean): Project {
   const existing = p.cursor.keyframes.find((k) => k.id === id);
   let keyframes: CursorKeyframe[];
+  // Placing the cursor where it is hidden starts a new show→hide segment here.
+  const visibility = !existing && hiddenAt(p.cursor, t) ? [...p.cursor.visibility, { id: newId('vis'), time: t, visible: true }] : p.cursor.visibility;
   if (existing) keyframes = p.cursor.keyframes.map((k) => (k.id === id ? { ...k, x: pt.x, y: pt.y } : k));
   else {
-    const prev = sortByTime(p.cursor.keyframes).filter((k) => k.time < t).pop();
+    const prev = segmentKeyframesAt({ visibility, keyframes: p.cursor.keyframes }, t).filter((k) => k.time < t).pop();
     keyframes = [...p.cursor.keyframes, { id, time: t, x: pt.x, y: pt.y, easing: prev?.easing ?? 'smooth', customBezier: prev?.customBezier, moveDuration: null, curve: 0 }];
   }
   let clicks = p.cursor.clicks;
   if (addClickToo && !clicks.some((c) => c.time === t)) clicks = [...clicks, { id: newId('clk'), time: t, button: 'left' }];
-  return { ...p, cursor: { ...p.cursor, keyframes, clicks } };
+  return { ...p, cursor: { ...p.cursor, keyframes, clicks, visibility } };
 }
 
 // ------------------------------------------------------------ crop editor
@@ -571,9 +552,12 @@ function Transport() {
       <span className="timecode">{formatTimecode(t, project.export.fps)}</span>
       <span className="timecode dim">/ {formatTimecode(dur, project.export.fps)}</span>
       <div style={{ flex: 1 }} />
-      <span className="hint" style={{ width: 150, textAlign: 'right' }}>
+      <span className="hint" style={{ width: 120, textAlign: 'right' }}>
         {project.export.resolution}p · {Math.round(project.export.fps.num / project.export.fps.den)} fps
       </span>
+      <Button variant="ghost" icon tip="Keyboard shortcuts" shortcut="?" onClick={() => editor().set({ dialog: 'help' })}>
+        <HelpCircle size={15} />
+      </Button>
     </div>
   );
 }

@@ -159,7 +159,10 @@ struct OpExecutor {
         if let f = cgColor(op.fill) {
             ctx.addPath(path)
             ctx.setFillColor(f)
+            // Erase = destination-out with the fill alpha as strength (spotlight union).
+            if op.erase == true { ctx.setBlendMode(.destinationOut) }
             ctx.fillPath(using: (op.holes?.isEmpty == false) ? .evenOdd : .winding)
+            ctx.setBlendMode(.normal)
         }
         let width = op.lineWidth ?? 1
         if let s = cgColor(op.stroke), width > 0 {
